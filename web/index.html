@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Notereader</title>
+<meta name="description" content="Scan choir sheet music and hear your voice part played back in tempo.">
+<meta name="theme-color" content="#1f5c4d">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ───────────── Library / scan ───────────── -->
+<main id="home" class="view">
+  <header class="home-head">
+    <h1>Notereader</h1>
+    <button class="icon-btn" id="settingsBtn" aria-label="Settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+    </button>
+  </header>
+
+  <section class="scan-card">
+    <h2>Add sheet music</h2>
+    <p class="hint">Photograph each page flat and well lit, or pick photos or a PDF. Add pages in order, then read them.</p>
+    <div class="scan-actions">
+      <button class="btn primary" id="cameraBtn">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        Take photo
+      </button>
+      <button class="btn" id="filesBtn">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>
+        Photos / PDF / MusicXML
+      </button>
+    </div>
+    <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
+    <input type="file" id="filesInput" accept="image/*,application/pdf,.pdf,.musicxml,.xml,.mxl,.mei" multiple hidden>
+
+    <div id="tray" hidden>
+      <ol id="pages" class="pages"></ol>
+      <button class="btn primary wide" id="readBtn">Read music</button>
+    </div>
+
+    <div id="progress" class="progress" hidden role="status">
+      <div class="spinner" aria-hidden="true"></div>
+      <div>
+        <strong id="progressTitle">Reading the music…</strong>
+        <div class="hint" id="progressDetail">This can take a minute per page.</div>
+      </div>
+      <button class="btn small" id="cancelBtn">Cancel</button>
+    </div>
+    <p id="scanError" class="error" hidden role="alert"></p>
+  </section>
+
+  <section>
+    <h2>Your scores</h2>
+    <ul id="library" class="library"></ul>
+    <p id="emptyLibrary" class="hint">Nothing here yet. Scan a sheet, or
+      <button class="link" id="sampleBtn">try the sample hymn</button>.</p>
+  </section>
+</main>
+
+<!-- ───────────── Player ───────────── -->
+<main id="player" class="view" hidden>
+  <header class="player-head">
+    <button class="icon-btn" id="backBtn" aria-label="Back to library">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <button id="titleBtn" class="title" title="Rename"></button>
+    <button class="icon-btn" id="zoomOutBtn" aria-label="Smaller notes">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M16 16l4 4M8.5 11h5"/></svg>
+    </button>
+    <button class="icon-btn" id="zoomInBtn" aria-label="Larger notes">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M16 16l4 4M8.5 11h5M11 8.5v5"/></svg>
+    </button>
+    <button class="icon-btn" id="moreBtn" aria-label="More">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg>
+    </button>
+  </header>
+
+  <div id="scoreWrap" class="score-wrap">
+    <div id="score" class="score"></div>
+    <div id="countIn" class="count-in" hidden aria-hidden="true"></div>
+  </div>
+
+  <div id="editBar" class="edit-bar" hidden>
+    <span class="edit-label" id="editLabel">Fix note</span>
+    <button data-edit="up" aria-label="Move note up">▲</button>
+    <button data-edit="down" aria-label="Move note down">▼</button>
+    <button data-edit="sharp" aria-label="Sharp">♯</button>
+    <button data-edit="flat" aria-label="Flat">♭</button>
+    <button data-edit="natural" aria-label="Natural">♮</button>
+    <button data-edit="delete" aria-label="Remove note">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/></svg>
+    </button>
+    <button data-edit="close" aria-label="Done">✓</button>
+  </div>
+
+  <footer class="transport">
+    <div class="voices-row">
+      <div id="voiceChips" class="chips"></div>
+      <button class="btn small" id="voicesBtn">Voices</button>
+    </div>
+    <div class="seek-row">
+      <input type="range" id="seek" min="0" max="1" step="0.01" value="0" aria-label="Position">
+      <span id="measureLabel" class="measure-label">1</span>
+    </div>
+    <div class="controls-row">
+      <button class="icon-btn" id="restartBtn" aria-label="Back to the start">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M19 5l-9 7 9 7z"/></svg>
+      </button>
+      <button class="play-btn" id="playBtn" aria-label="Play">
+        <svg viewBox="0 0 24 24" aria-hidden="true" id="playIcon"><path d="M8 5l11 7-11 7z"/></svg>
+      </button>
+      <button class="toggle" id="metroBtn" aria-pressed="false" title="Metronome click">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l4 18H5z"/><path d="M12 15l5-9"/></svg>
+        <span>Click</span>
+      </button>
+      <button class="toggle" id="countBtn" aria-pressed="true" title="Count one bar in before playing">
+        <span class="count-glyph" aria-hidden="true">1·2</span>
+        <span>Count‑in</span>
+      </button>
+      <div class="tempo">
+        <button class="icon-btn" id="tempoDown" aria-label="Slower">−</button>
+        <button id="tempoValue" class="tempo-value" title="Set tempo"><b id="bpm">84</b><small>bpm</small></button>
+        <button class="icon-btn" id="tempoUp" aria-label="Faster">+</button>
+      </div>
+    </div>
+  </footer>
+</main>
+
+<!-- ───────────── Sheets / dialogs ───────────── -->
+<dialog id="voicesDialog" class="sheet">
+  <form method="dialog">
+    <header><h2>Voices</h2><button class="btn small" value="close">Done</button></header>
+    <p class="hint">Choose what you hear. “Only” plays one voice alone; “Lead” keeps the others quietly in the background.</p>
+    <div id="voiceList" class="voice-list"></div>
+    <label class="slider-row"><span>Tempo: <output id="tempoOut">84</output> beats per minute</span>
+      <input type="range" id="tempoSlider" min="30" max="220" step="1" value="84">
+    </label>
+    <label class="slider-row">Sound
+      <select id="soundSelect">
+        <option value="choir">Soft voice</option>
+        <option value="piano">Piano</option>
+        <option value="organ">Organ</option>
+      </select>
+    </label>
+  </form>
+</dialog>
+
+<dialog id="moreDialog" class="sheet">
+  <form method="dialog">
+    <header><h2>Score</h2><button class="btn small" value="close">Close</button></header>
+    <div class="menu">
+      <button value="rename">Rename</button>
+      <button value="export">Save as MEI file</button>
+      <button value="reset">Undo all note fixes</button>
+      <button value="delete" class="danger">Delete this score</button>
+    </div>
+    <p class="hint">Scans are never perfect. Pause, tap a wrong note, and use the bar that appears to fix its pitch.</p>
+  </form>
+</dialog>
+
+<dialog id="settingsDialog" class="sheet">
+  <form method="dialog">
+    <header><h2>Settings</h2><button class="btn small" value="close">Done</button></header>
+    <label class="field">Recognition server
+      <input type="url" id="serverUrl" placeholder="Same address as this app" inputmode="url" autocomplete="off">
+    </label>
+    <p class="hint">Reading photos and PDFs happens on the Notereader server. Leave this empty when the app is opened from that server. Playback and saved scores work offline.</p>
+    <p class="hint" id="serverStatus"></p>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden role="status"></div>
+
+<script src="vendor/verovio-toolkit-wasm.js" defer></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
