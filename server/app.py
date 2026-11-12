@@ -7,6 +7,7 @@ Recognition is slow (10 s - 2 min per page on a CPU), so uploads become jobs
 that the app polls:
 
     POST /api/recognize        multipart "files" (images and/or PDFs, in page order)
+    POST /api/recognize-url    {"url": ...}: a PDF/image address, or a web page with PDFs on it
     GET  /api/jobs/{id}        -> {"status": "queued|running|done|error", ...}
     GET  /api/jobs/{id}/musicxml
 """
@@ -31,6 +32,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
+from pydantic import BaseModel
+
+from . import weblink
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_FILES = int(os.environ.get("NOTEREADER_MAX_FILES", "30"))
@@ -170,36 +174,25 @@ def health() -> dict:
     return {"ok": True, "queued": job_queue.qsize()}
 
 
-@app.post("/api/recognize")
-async def recognize(files: list[UploadFile] = File(...)) -> dict:
-    if not files:
-        raise HTTPException(400, "No files uploaded")
-    if len(files) > MAX_FILES:
-        raise HTTPException(400, f"At most {MAX_FILES} files per score")
-
+def start_job(uploads: list[tuple[str, bytes]]) -> dict:
+    """Queues recognition of (filename, bytes) pages given in reading order."""
     workdir = Path(tempfile.mkdtemp(prefix="notereader-"))
     inputs: list[Path] = []
-    total = 0
     try:
-        for index, upload in enumerate(files):
-            data = await upload.read()
-            total += len(data)
-            if total > MAX_BYTES:
-                raise HTTPException(413, "Upload is too large")
-            ext = Path(upload.filename or "").suffix.lower()
-            is_pdf = data[:5] == b"%PDF-" or ext == ".pdf"
-            raw = workdir / f"upload_{index:03d}{'.pdf' if is_pdf else ext or '.img'}"
-            raw.write_bytes(data)
-            if is_pdf:
+        for index, (filename, data) in enumerate(uploads):
+            ext = Path(filename or "").suffix.lower()
+            if data.lstrip()[:5] == b"%PDF-" or ext == ".pdf":
                 page = workdir / f"page_{index:03d}.pdf"
-                raw.rename(page)
+                page.write_bytes(data)
             else:
+                raw = workdir / f"upload_{index:03d}.img"
+                raw.write_bytes(data)
                 page = workdir / f"page_{index:03d}.png"
                 try:
                     normalize_image(raw, page)
                 except Exception as exc:  # noqa: BLE001
                     raise HTTPException(
-                        415, f"'{upload.filename}' is not an image or PDF this app can read"
+                        415, f"'{filename}' is not an image or PDF this app can read"
                     ) from exc
                 raw.unlink(missing_ok=True)
             inputs.append(page)
@@ -211,6 +204,40 @@ async def recognize(files: list[UploadFile] = File(...)) -> dict:
     jobs[job.id] = job
     job_queue.put(job)
     return job.public()
+
+
+@app.post("/api/recognize")
+async def recognize(files: list[UploadFile] = File(...)) -> dict:
+    if not files:
+        raise HTTPException(400, "No files uploaded")
+    if len(files) > MAX_FILES:
+        raise HTTPException(400, f"At most {MAX_FILES} files per score")
+    uploads: list[tuple[str, bytes]] = []
+    total = 0
+    for upload in files:
+        data = await upload.read()
+        total += len(data)
+        if total > MAX_BYTES:
+            raise HTTPException(413, "Upload is too large")
+        uploads.append((upload.filename or "", data))
+    return start_job(uploads)
+
+
+class LinkRequest(BaseModel):
+    url: str
+
+
+@app.post("/api/recognize-url")
+def recognize_url(body: LinkRequest) -> dict:
+    """Reads music from a web address. Returns a job, or PDFs to choose between."""
+    try:
+        found, choices = weblink.resolve(body.url)
+    except weblink.LinkError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if found is None:
+        return {"choices": choices}
+    name = "link.pdf" if found.kind == "pdf" else "link.img"
+    return {**start_job([(name, found.data)]), "source": found.url}
 
 
 @app.get("/api/jobs/{job_id}")

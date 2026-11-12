@@ -35,7 +35,22 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>
         Photos / PDF / MusicXML
       </button>
+      <button class="btn" id="linkBtn" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
+        From a web link
+      </button>
     </div>
+    <form id="linkForm" class="link-form" hidden>
+      <label for="linkUrl">Address of a PDF, or of a web page that has the PDF on it</label>
+      <div class="link-row">
+        <input type="url" id="linkUrl" placeholder="https://…" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+        <button class="btn primary" type="submit">Read</button>
+      </div>
+      <div id="linkChoices" class="link-choices" hidden>
+        <p class="hint">This page has several PDFs. Which one?</p>
+        <ul id="linkChoiceList"></ul>
+      </div>
+    </form>
     <input type="file" id="cameraInput" accept="image/*" capture="environment" hidden>
     <input type="file" id="filesInput" accept="image/*,application/pdf,.pdf,.musicxml,.xml,.mxl,.mei" multiple hidden>
 
@@ -53,6 +68,15 @@
       <button class="btn small" id="cancelBtn">Cancel</button>
     </div>
     <p id="scanError" class="error" hidden role="alert"></p>
+  </section>
+
+  <section id="installCard" class="install-card" hidden>
+    <div>
+      <strong>Install Notereader</strong>
+      <div class="hint" id="installHint">Put it on your home screen and use saved scores offline.</div>
+    </div>
+    <button class="btn small primary" id="installBtn">Install</button>
+    <button class="icon-btn" id="installDismiss" aria-label="Not now">✕</button>
   </section>
 
   <section>

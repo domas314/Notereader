@@ -1,0 +1,16 @@
+{
+  "name": "notereader",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Builds the installable Android app from the web app in web/",
+  "scripts": {
+    "android:prepare": "cap add android && capacitor-assets generate --android --iconBackgroundColor '#1f5c4d' --iconBackgroundColorDark '#1f5c4d' --splashBackgroundColor '#f1ede4' --splashBackgroundColorDark '#171918' && node scripts/android-manifest.cjs && cap sync android",
+    "android:build": "cd android && ./gradlew assembleDebug --no-daemon"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/assets": "^4.0.0",
+    "@capacitor/cli": "^8.6.2",
+    "@capacitor/core": "^8.6.2"
+  }
+}

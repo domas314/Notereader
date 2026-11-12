@@ -149,32 +149,38 @@ function showScanError(text) {
 const serverBase = () => (localStorage.getItem('server') || '').replace(/\/+$/, '');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function readMusic() {
-  if (!pending.length) return;
+/** In the installed Android app there is no built-in server: one must be set in Settings. */
+const isNative = () => Boolean(window.Capacitor?.isNativePlatform?.());
+
+/** Sends a recognition request, follows the job to the end and opens the result. */
+async function recognize(request, sendingText) {
   $('scanError').hidden = true;
   $('tray').hidden = true;
+  $('linkChoices').hidden = true;
   $('progress').hidden = false;
-  $('progressTitle').textContent = 'Sending pages…';
+  $('progressTitle').textContent = sendingText;
   $('progressDetail').textContent = 'This can take a minute per page.';
   scanAbort = new AbortController();
   const signal = scanAbort.signal;
   try {
-    const form = new FormData();
-    pending.forEach((p, i) => form.append('files', p.blob, p.pdf ? p.name : `page-${i + 1}.jpg`));
+    if (isNative() && !serverBase()) {
+      throw new Error('Set the address of your Notereader server in Settings (the sliders icon) first.');
+    }
     let res;
     try {
-      res = await fetch(`${serverBase()}/api/recognize`, { method: 'POST', body: form, signal });
+      res = await fetch(`${serverBase()}${request.path}`, { method: 'POST', signal, ...request.init });
     } catch (err) {
       if (signal.aborted) throw err;
       throw new Error('Could not reach the recognition server. Check your connection, or the server address in Settings.');
     }
-    if (!res.ok) {
-      const detail = await res.json().then((j) => j.detail, () => null);
-      throw new Error(typeof detail === 'string' ? detail : res.status === 404 || res.status === 405
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body) {
+      throw new Error(typeof body?.detail === 'string' ? body.detail : !body || res.status === 404 || res.status === 405
         ? 'This address has no recognition server. Set its address in Settings.'
-        : `The server refused the upload (${res.status}).`);
+        : `The server refused the request (${res.status}).`);
     }
-    let job = await res.json();
+    if (body.choices) return body.choices;
+    let job = body;
     $('progressTitle').textContent = 'Reading the music…';
     while (job.status === 'queued' || job.status === 'running') {
       await sleep(1500);
@@ -184,15 +190,99 @@ async function readMusic() {
     }
     if (job.status !== 'done') throw new Error(job.error || 'The music could not be read.');
     const xml = await fetch(`${serverBase()}/api/jobs/${job.id}/musicxml`, { signal }).then((r) => r.text());
-    for (const p of pending) if (p.url) URL.revokeObjectURL(p.url);
-    pending = [];
-    await addScore(xml);
+    const fromLink = body.source && decodeURIComponent(body.source.split(/[?#]/)[0].split('/').pop() || '')
+      .replace(/\.\w{2,5}$/, '').replace(/[-_]+/g, ' ').trim();
+    await addScore(xml, request.title || fromLink || undefined);
+    return true;
   } catch (err) {
     if (err.name !== 'AbortError') showScanError(err.message);
+    return false;
   } finally {
     $('progress').hidden = true;
     scanAbort = null;
     renderTray();
+  }
+}
+
+async function readMusic() {
+  if (!pending.length) return;
+  const form = new FormData();
+  pending.forEach((p, i) => form.append('files', p.blob, p.pdf ? p.name : `page-${i + 1}.jpg`));
+  const done = await recognize({ path: '/api/recognize', init: { body: form } }, 'Sending pages…');
+  if (done === true) {
+    for (const p of pending) if (p.url) URL.revokeObjectURL(p.url);
+    pending = [];
+    renderTray();
+  }
+}
+
+/** Reads music from a web address: a PDF, or a page that links to PDFs. */
+async function readLink(url, title) {
+  url = url.trim();
+  if (!url) return;
+  const fallback = title || decodeURIComponent(url.split(/[?#]/)[0].split('/').filter(Boolean).pop() || '')
+    .replace(/\.pdf$/i, '').replace(/[-_]+/g, ' ').trim();
+  const result = await recognize({
+    path: '/api/recognize-url',
+    title: fallback && !/^[\w-]+(\.[\w-]+)+$/.test(fallback) ? fallback : undefined,
+    init: { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) },
+  }, 'Fetching the link…');
+  if (result === true) {
+    $('linkUrl').value = '';
+    $('linkForm').hidden = true;
+    $('linkBtn').setAttribute('aria-expanded', 'false');
+  } else if (Array.isArray(result)) {
+    const list = $('linkChoiceList');
+    list.replaceChildren();
+    for (const choice of result) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = choice.label;
+      btn.onclick = () => readLink(choice.url, choice.label.replace(/\.pdf$/i, ''));
+      li.append(btn);
+      list.append(li);
+    }
+    $('linkChoices').hidden = false;
+  }
+}
+
+function openLinkForm(url = '') {
+  $('linkForm').hidden = false;
+  $('linkBtn').setAttribute('aria-expanded', 'true');
+  if (url) $('linkUrl').value = url;
+  else $('linkUrl').focus();
+}
+
+// ═════════════ Installing ═════════════
+
+function setupInstall() {
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (standalone || isNative() || localStorage.getItem('installDismissed')) return;
+  let promptEvent = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    promptEvent = e;
+    $('installCard').hidden = false;
+  });
+  window.addEventListener('appinstalled', () => ($('installCard').hidden = true));
+  $('installBtn').onclick = async () => {
+    if (!promptEvent) return;
+    promptEvent.prompt();
+    await promptEvent.userChoice;
+    promptEvent = null;
+    $('installCard').hidden = true;
+  };
+  $('installDismiss').onclick = () => {
+    localStorage.setItem('installDismissed', '1');
+    $('installCard').hidden = true;
+  };
+  // iPhone / iPad have no install prompt: explain the manual way.
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (ios) {
+    $('installHint').textContent = 'In Safari, tap Share, then “Add to Home Screen”.';
+    $('installBtn').hidden = true;
+    $('installCard').hidden = false;
   }
 }
 
@@ -559,6 +649,16 @@ function init() {
     };
   }
   $('readBtn').onclick = readMusic;
+  $('linkBtn').onclick = () => ($('linkForm').hidden ? openLinkForm() : ($('linkForm').hidden = true, $('linkBtn').setAttribute('aria-expanded', 'false')));
+  $('linkForm').onsubmit = (e) => { e.preventDefault(); readLink($('linkUrl').value); };
+  setupInstall();
+  // A link shared to the installed app (Android "Share" menu) arrives in the address.
+  const shared = new URLSearchParams(location.search);
+  const sharedUrl = [shared.get('url'), shared.get('text')].join(' ').match(/https?:\/\/\S+/)?.[0];
+  if (sharedUrl) {
+    history.replaceState(null, '', location.pathname);
+    openLinkForm(sharedUrl);
+  }
   $('cancelBtn').onclick = () => scanAbort?.abort();
   $('sampleBtn').onclick = async () => {
     try {
