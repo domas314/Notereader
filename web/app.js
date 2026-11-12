@@ -286,6 +286,35 @@ function setupInstall() {
   }
 }
 
+// ═════════════ Updating the installed app ═════════════
+
+/**
+ * The installed Android app holds its own copy of this web app. When the
+ * Notereader server has a newer copy, fetch it in the background; it takes
+ * effect the next time the app is opened. (In a browser, the page is always
+ * loaded fresh from the server, so nothing is needed there.)
+ */
+async function autoUpdate() {
+  const updater = window.Capacitor?.Plugins?.CapacitorUpdater;
+  if (!isNative() || !updater) return;
+  try {
+    await updater.notifyAppReady(); // confirms this copy started fine (otherwise it is rolled back)
+    const local = await fetch('version.json').then((r) => (r.ok ? r.json() : null), () => null);
+    if (local?.version) localStorage.setItem('appVersion', local.version);
+    if (!serverBase()) return;
+    const remote = await fetch(`${serverBase()}/api/app/version`, { signal: AbortSignal.timeout(8000) }).then((r) => r.json());
+    if (!remote?.version || remote.version === local?.version) return;
+    // Don't retry a copy that was downloaded before but failed to start.
+    if (localStorage.getItem('updateTried') === remote.version) return;
+    const bundle = await updater.download({ url: `${serverBase()}/api/app/bundle.zip?v=${remote.version}`, version: remote.version });
+    await updater.next({ id: bundle.id });
+    localStorage.setItem('updateTried', remote.version);
+    toast('Update downloaded. It will be used the next time you open the app.', 5000);
+  } catch (err) {
+    console.warn('Update check failed', err);
+  }
+}
+
 // ═════════════ Player view ═════════════
 
 function settings() {
@@ -674,6 +703,7 @@ function init() {
   $('serverUrl').onchange = () => {
     localStorage.setItem('server', $('serverUrl').value.trim());
     checkServer();
+    autoUpdate();
   };
 
   $('backBtn').onclick = async () => {
@@ -793,6 +823,8 @@ function init() {
   });
 
   refreshLibrary();
+  autoUpdate();
+  document.addEventListener('resume', autoUpdate); // app brought back to the foreground
   requestAnimationFrame(frame);
   getToolkit().catch((err) => toast(err.message, 6000)); // warm up the engraver
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -805,6 +837,8 @@ async function checkServer() {
     const res = await fetch(`${serverBase()}/api/health`, { signal: AbortSignal.timeout(6000) });
     const ok = res.ok && (await res.json()).ok;
     el.textContent = ok ? 'Server is reachable.' : 'No recognition server at this address.';
+    const version = localStorage.getItem('appVersion');
+    if (isNative()) el.textContent += ` App version: ${version || 'as installed'}. Updates come from this server automatically.`;
   } catch {
     el.textContent = 'No recognition server at this address.';
   }

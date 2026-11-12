@@ -63,8 +63,13 @@ open the repository's **Actions** tab → latest **Android app** run → downloa
 **Notereader-android** artifact, unzip it, and open `Notereader.apk` on the phone
 (Android will ask you to allow installing from that source). On first start, open
 Settings (sliders icon) and enter your recognition server's address.
-Each build is signed with a throw-away debug key, so to install a newer build you
-must uninstall the old one first (which removes saved scores – export them before).
+**Automatic updates.** The installed app checks your Notereader server each time it is
+opened; if the server has a newer version of the app, it is downloaded in the background
+and used from the next start. So updating the server (pull the new code and restart it)
+updates every phone – no reinstalling. Saved scores are kept.
+Only changes to the Android shell itself (rare: permissions, icon, plugins) need a new
+APK. Each APK build is signed with a throw-away debug key, so installing a newer APK
+means uninstalling the old one first, which removes saved scores.
 To build it yourself: `npm install && npm run android:prepare && npm run android:build`
 (needs Node 22, Java 21 and the Android SDK).
 

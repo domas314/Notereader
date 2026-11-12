@@ -2,6 +2,20 @@
   "appId": "io.github.domas314.notereader",
   "appName": "Notereader",
   "webDir": "web",
-  "server": { "androidScheme": "https", "cleartext": true },
-  "android": { "allowMixedContent": true }
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  },
+  "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": false,
+      "statsUrl": "",
+      "channelUrl": "",
+      "updateUrl": "",
+      "httpsOnly": false
+    }
+  }
 }

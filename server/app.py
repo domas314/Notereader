@@ -14,6 +14,8 @@ that the app polls:
 
 from __future__ import annotations
 
+import hashlib
+import io
 import os
 import re
 import shutil
@@ -23,6 +25,7 @@ import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Queue
@@ -254,6 +257,52 @@ def job_result(job_id: str) -> Response:
     if job is None or job.result is None:
         raise HTTPException(404, "No result")
     return FileResponse(job.result, media_type="application/vnd.recordare.musicxml+xml")
+
+
+# ───── App updates ─────
+# The installed Android app carries its own copy of ../web. It asks this server
+# whether that copy is current and, if not, downloads the newer one - so updating
+# the server updates every phone that uses it.
+
+_bundle_cache: tuple[tuple, str, bytes] | None = None
+
+
+def app_bundle() -> tuple[str, bytes]:
+    """Returns (version, zip of the web app). The version is a hash of its files."""
+    global _bundle_cache  # noqa: PLW0603
+    files = sorted(
+        p for p in WEB_DIR.rglob("*") if p.is_file() and p.name != "version.json"
+    )
+    stamp = tuple((str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in files)
+    if _bundle_cache and _bundle_cache[0] == stamp:
+        return _bundle_cache[1], _bundle_cache[2]
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.relative_to(WEB_DIR).as_posix().encode())
+        digest.update(path.read_bytes())
+    version = digest.hexdigest()[:12]
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in files:
+            archive.write(path, path.relative_to(WEB_DIR).as_posix())
+        archive.writestr("version.json", f'{{"version": "{version}"}}')
+    _bundle_cache = (stamp, version, buffer.getvalue())
+    return version, buffer.getvalue()
+
+
+@app.get("/api/app/version")
+def app_version() -> dict:
+    return {"version": app_bundle()[0]}
+
+
+@app.get("/api/app/bundle.zip")
+def app_bundle_zip() -> Response:
+    return Response(app_bundle()[1], media_type="application/zip")
+
+
+@app.get("/version.json")
+def web_version() -> dict:
+    return app_version()
 
 
 @app.middleware("http")
