@@ -4,7 +4,8 @@ A phone app for choir singers: photograph (or upload a PDF of) your sheet music,
 and Notereader reads it, shows the score, and plays it back in strict tempo while
 highlighting the notes being sung. You choose which voice you hear.
 
-- **Scan** – camera photos, picked photos, multi-page PDFs, or MusicXML / MEI files.
+- **Scan** – camera photos, picked photos, multi-page PDFs, MusicXML / MEI files, or a
+  **web link**: paste the address of a PDF, or of a page that has the PDF on it.
   Recognition is built for imperfect input: tilted, unevenly lit, slightly blurry pages.
 - **Voices** – each voice (Soprano / Alto / Tenor / Bass, or however many the score has)
   can be Full, Quiet or Off. "Only" solos one voice; "Lead" keeps the others quietly
@@ -54,6 +55,31 @@ a page takes about 10 s on a 4-core machine and longer on small shared CPUs.
 
 If the app is served from somewhere else than the recognition server, enter the
 server's address under Settings (the sliders icon on the start screen).
+
+## Install it on your phone
+
+**Android – installable app (APK).** Every push builds one on GitHub:
+open the repository's **Actions** tab → latest **Android app** run → download the
+**Notereader-android** artifact, unzip it, and open `Notereader.apk` on the phone
+(Android will ask you to allow installing from that source). On first start, open
+Settings (sliders icon) and enter your recognition server's address.
+Each build is signed with a throw-away debug key, so to install a newer build you
+must uninstall the old one first (which removes saved scores – export them before).
+To build it yourself: `npm install && npm run android:prepare && npm run android:build`
+(needs Node 22, Java 21 and the Android SDK).
+
+**iPhone and Android – home-screen app.** Open the hosted server's `https://` address
+in the browser. On Android tap **Install**; on iPhone use Safari's Share →
+**Add to Home Screen**. It then opens full-screen like any app and plays saved scores
+offline. On Android you can also *share* a link from the browser to Notereader.
+
+## Reading from web links
+
+The server downloads the address you paste. If it is a web page, it looks for PDF links
+and embedded PDF viewers; with several PDFs you pick one. Pages that need a login, or
+that only show the music through scripts, cannot be read – open the PDF itself and copy
+its address, or download it and use *Photos / PDF*. Only public internet addresses are
+fetched; set `NOTEREADER_ALLOW_PRIVATE_URLS=1` to allow addresses on your own network.
 
 ## Getting good scans
 
