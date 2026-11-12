@@ -58,9 +58,9 @@ server's address under Settings (the sliders icon on the start screen).
 
 ## Install it on your phone
 
-**Android – installable app (APK).** Every push builds one on GitHub:
-open the repository's **Actions** tab → latest **Android app** run → download the
-**Notereader-android** artifact, unzip it, and open `Notereader.apk` on the phone
+**Android – installable app (APK).** Every push builds one on GitHub and attaches it to
+the **android-latest** release: on the phone, open the repository's **Releases** page
+(signed in to GitHub, as the repository is private), download `Notereader.apk` and open it
 (Android will ask you to allow installing from that source). On first start, open
 Settings (sliders icon) and enter your recognition server's address.
 **Automatic updates.** The installed app checks your Notereader server each time it is

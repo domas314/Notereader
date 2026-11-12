@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # to attach the APK to a release
 
 jobs:
   apk:
@@ -37,3 +37,13 @@ jobs:
         with:
           name: Notereader-android
           path: Notereader.apk
+      - name: Publish the APK as the "android-latest" release
+        if: github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest Notereader.apk \
+            --target "$GITHUB_SHA" \
+            --title "Notereader for Android (latest build)" \
+            --notes "Download Notereader.apk on your phone and open it to install. Built from ${GITHUB_SHA::7}."
