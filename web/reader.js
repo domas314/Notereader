@@ -5,9 +5,31 @@
 const ENGINE = new URL('./engine/', import.meta.url).href;
 export const isNative = () => Boolean(window.Capacitor?.isNativePlatform?.());
 
+// Reading in parallel needs more memory. If the app was closed by the phone in
+// the middle of a reading (most likely for lack of memory), the next readings use
+// fewer helpers. `readingWith` is set while a reading runs and cleared after it.
+const store = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* not essential */ } },
+  del: (k) => { try { localStorage.removeItem(k); } catch { /* not essential */ } },
+};
+function helperLimit() {
+  let limit = Number(store.get('helperLimit') || 3);
+  if (store.get('readingWith')) {
+    limit = limit >= 3 ? 2 : 1; // the last reading never finished
+    store.set('helperLimit', String(limit));
+    store.del('readingWith');
+  }
+  return limit;
+}
+
 let worker = null;
 function getWorker() {
-  worker ??= new Worker(new URL('./omr/worker.js', import.meta.url), { type: 'module' });
+  if (!worker) {
+    const url = new URL('./omr/worker.js', import.meta.url);
+    url.searchParams.set('helpers', String(helperLimit()));
+    worker = new Worker(url, { type: 'module' });
+  }
   return worker;
 }
 
@@ -33,6 +55,7 @@ export function readPages(pages, { onProgress = () => {}, signal } = {}) {
     let staves = 0;
     const stop = () => { w.terminate(); worker = null; }; // the only way to interrupt the engine
     const finish = (fn, value) => {
+      store.del('readingWith');
       signal?.removeEventListener('abort', onAbort);
       w.onmessage = w.onerror = null;
       fn(value);
@@ -48,8 +71,10 @@ export function readPages(pages, { onProgress = () => {}, signal } = {}) {
         const line = data.line || '';
         let m;
         if ((m = /^Processing .*page_(\d+)/.exec(line))) { page = Number(m[1]) + 1; staves = 0; onProgress(`${where()}looking at the page`); }
-        else if (/^Loading model segnet/.test(line) || /^Starting Inference/.test(line)) onProgress(`${where()}finding staves and notes`);
-        else if ((m = /^Found (\d+) staffs/.exec(line))) staves = Number(m[1]);
+        else if (/^Loading model segnet/.test(line) || /^Starting Inference/.test(line) || /^Segmentation:/.test(line)) onProgress(`${where()}finding staves and notes`);
+        else if ((m = /^Found (\d+) staffs/.exec(line))) { staves = Number(m[1]); onProgress(`${where()}found ${staves} staves, preparing them`); }
+        else if ((m = /^Reading (\d+) staffs on/.exec(line))) onProgress(`${where()}reading ${m[1]} staves`);
+        else if ((m = /^Read staff (\d+) of (\d+)/.exec(line))) onProgress(`${where()}read ${m[1]} of ${m[2]} staves`);
         else if ((m = /^Running TrOmr inference on staff image (\d+)/.exec(line))) {
           onProgress(`${where()}reading staff ${Number(m[1]) + 1}${staves ? ` of ${staves}` : ''}`);
         } else if (/^Merging|^Saved the generated/.test(line)) onProgress('Putting the pages together');
@@ -60,6 +85,7 @@ export function readPages(pages, { onProgress = () => {}, signal } = {}) {
           : 'Could not find readable music here. Try a sharper, flatter, well-lit photo with the whole page visible.'));
       }
     };
+    store.set('readingWith', '1');
     const transfer = pages.map((p) => p.bytes);
     w.postMessage({ type: 'recognize', pages }, transfer);
   });

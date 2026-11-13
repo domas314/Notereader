@@ -2,6 +2,7 @@
 # Assembles web/engine/: everything the app needs to read sheet music on the
 # device itself. These files are large (~190 MB) and come from public releases,
 # so they are downloaded at build time instead of being stored in this repository.
+# Needs: node_modules (npm install), python3 with venv, curl, unzip.
 #
 #   pyodide/  Python runtime for the browser, with numpy, OpenCV and Pillow
 #   ort/      ONNX Runtime Web (runs the neural networks)
@@ -48,5 +49,18 @@ for model in "${MODELS[@]}"; do
   find "$TMP/models" -name "$model.onnx" -exec mv {} "$E/models/" \;
   test -s "$E/models/$model.onnx"
 done
+
+echo "Making the staff reader 8-bit (about 2x faster on phones, same notes in tests)"
+# homr ships its decoder already quantized; the encoder is quantized here the same
+# way. The segmentation network stays as it is: quantized it runs slower.
+python3 -m venv "$TMP/q"
+"$TMP/q/bin/pip" install --quiet onnx==1.23.2 onnxruntime==1.31.1
+"$TMP/q/bin/python" - "$E/models" <<'PY'
+import glob, os, sys
+from onnxruntime.quantization import QuantType, quantize_dynamic
+model = glob.glob(os.path.join(sys.argv[1], "encoder_*.onnx"))[0]
+quantize_dynamic(model, model + ".int8", weight_type=QuantType.QInt8, op_types_to_quantize=["MatMul", "Gemm"])
+os.replace(model + ".int8", model)
+PY
 
 du -sh "$E"

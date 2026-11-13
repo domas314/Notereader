@@ -45,13 +45,26 @@ To change the update repository, edit `UPDATE_REPO` in `.github/workflows/androi
 
 ## How reading works
 
-Reading a page takes a few minutes on a phone (about 70 s per page on a desktop-class
-processor). Keep the app open while it works; the screen is kept awake.
+Reading happens in steps: find the staves and notes on the page (segmentation), then read
+each staff. To make that fast on a phone:
+
+- **Blank areas are skipped.** Margins, the table around a photo and empty space under the
+  last system are not run through the segmentation network (a third of a typical photo).
+- **Several cores.** Helper workers (`web/omr/pool.js`) segment the page and read the staves
+  side by side, one per spare core: up to 3 on phones reporting 8 GB of memory, 2 on 4 GB,
+  none below. Each needs about 300 MB. If the phone ever closes the app during a reading, the
+  next readings use fewer helpers.
+- **8-bit staff reader.** The network that looks at each staff runs with 8-bit weights
+  (converted by `npm run engine`), about twice as fast and a third of the size.
+
+Measured on a full page of four-part music (12 staves) on a 4-core computer: 123 s before
+these changes, 45 s after, with exactly the same notes read. Phones are slower than that
+computer; expect roughly a minute or two per page.
 
 | Part | What it does |
 | --- | --- |
 | `web/` | The whole app: plain HTML/JS, no build step. |
-| `web/omr/` | On-device recognition: runs [homr](https://github.com/liebharc/homr) (Python) in [Pyodide](https://pyodide.org), with its neural networks executed by [ONNX Runtime Web](https://onnxruntime.ai). |
+| `web/omr/` | On-device recognition: runs [homr](https://github.com/liebharc/homr) (Python) in [Pyodide](https://pyodide.org), with its neural networks executed by [ONNX Runtime Web](https://onnxruntime.ai) in parallel helper workers. |
 | `web/reader.js` | Turns photos, PDFs ([pdf.js](https://mozilla.github.io/pdf.js/)) and web links into pages for the engine. |
 | `web/score.js`, `web/player.js` | Engraving with [Verovio](https://www.verovio.org), voice splitting, and the tempo-locked Web Audio player. |
 | `web/update.js` | Update check against the Checkupdate repository's releases. |
@@ -88,7 +101,9 @@ address, or download it and use *Photos / PDF*.
 
 ## Known limits
 
-- Repeats, first/second endings and D.C./D.S. are not followed; the music plays straight through.
+- Repeat signs and first/second endings are followed. D.C., D.S., Coda and Fine are not.
+- Scores scanned before repeats were fixed may have their start-repeat sign in the wrong
+  place; scan them again.
 - Lyrics, dynamics and tempo changes inside the piece are not read.
 - Note fixes cover pitch and accidentals, not rhythm.
 - iPhone is not supported: there is no APK equivalent, and Safari lacks a feature the

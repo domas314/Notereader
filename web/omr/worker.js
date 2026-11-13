@@ -14,6 +14,57 @@ ort.env.wasm.wasmPaths = `${ENGINE}ort/`;
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
 ort.env.logLevel = 'error';
 
+// ───── Helpers that read parts of the page in parallel (pool.js) ─────
+// How many: one per spare processor core, limited by the phone's memory (each
+// helper holds its own copy of the networks, about 300 MB) and by the app, which
+// lowers the limit if a reading was ever cut short (see reader.js).
+const cores = navigator.hardwareConcurrency || 2;
+const memory = navigator.deviceMemory || 4; // GB, rounded down to 2, 4 or 8 by the browser
+let POOL_SIZE = Math.max(1, Math.min(cores - 1, memory >= 8 ? 3 : memory >= 4 ? 2 : 1));
+const helperLimit = Number(new URL(self.location.href).searchParams.get('helpers'));
+if (Number.isFinite(helperLimit) && helperLimit > 0) POOL_SIZE = Math.min(POOL_SIZE, helperLimit);
+if (POOL_SIZE < 2) POOL_SIZE = 1; // a single helper would only add memory, not speed
+
+class Helper {
+  constructor() {
+    this.worker = new Worker(new URL('./pool.js', import.meta.url), { type: 'module' });
+    this.calls = new Map();
+    this.nextId = 0;
+    this.worker.onmessage = ({ data }) => {
+      const call = this.calls.get(data.id);
+      this.calls.delete(data.id);
+      if (data.error) call?.reject(new Error(data.error));
+      else call?.resolve(data);
+    };
+    this.worker.onerror = (e) => {
+      for (const call of this.calls.values()) call.reject(new Error(e.message || 'A reading helper stopped'));
+      this.calls.clear();
+    };
+  }
+  call(message, transfer = []) {
+    const id = ++this.nextId;
+    return new Promise((resolve, reject) => {
+      this.calls.set(id, { resolve, reject });
+      this.worker.postMessage({ ...message, id }, transfer);
+    });
+  }
+}
+let helpers = null;
+const getHelpers = () => (helpers ??= Array.from({ length: POOL_SIZE }, () => new Helper()));
+
+/** Runs jobs on the helpers, each helper taking the next job when it is free. */
+async function onHelpers(jobs, run) {
+  const results = new Array(jobs.length);
+  let next = 0;
+  await Promise.all(getHelpers().map(async (helper) => {
+    while (next < jobs.length) {
+      const index = next++;
+      results[index] = await run(helper, jobs[index], index);
+    }
+  }));
+  return results;
+}
+
 const DTYPES = { float32: 'float32', float16: 'float16', int64: 'int64', int32: 'int32', uint8: 'uint8', bool: 'bool', float64: 'float64' };
 const sessions = new Map();
 
@@ -31,6 +82,39 @@ self.ortBridge = {
   },
   tensor(dtype, data, dims) {
     return new ort.Tensor(DTYPES[dtype] || dtype, data, Array.from(dims));
+  },
+  poolSize: POOL_SIZE,
+  // Starts loading networks in the helpers ahead of time, while other work runs.
+  preload(files) {
+    if (POOL_SIZE < 2) return;
+    for (const h of getHelpers()) h.call({ type: 'load', files: Array.from(files) }).catch(() => {});
+  },
+  // Segmentation of the page's patches, split across the helpers.
+  async segment(file, data, count, size) {
+    const per = size * size * 3;
+    const chunk = 1; // one patch per call keeps each helper's working memory small
+    const jobs = [];
+    for (let start = 0; start < count; start += chunk) jobs.push([start, Math.min(chunk, count - start)]);
+    const parts = await onHelpers(jobs, (helper, [start, n]) => {
+      const slice = data.slice(start * per, (start + n) * per);
+      return helper.call({ type: 'segment', file, data: slice, count: n, size }, [slice.buffer]);
+    });
+    const labels = new Uint8Array(count * size * size);
+    parts.forEach((part, i) => labels.set(part.labels, jobs[i][0] * size * size));
+    // Free the segmentation network's memory before the staves are read.
+    await Promise.all(getHelpers().map((h) => h.call({ type: 'drop', file })));
+    return labels;
+  },
+  // Reads staves side by side; returns, per staff, its symbols as token numbers.
+  async staves(encoderFile, decoderFile, images, cfg) {
+    let done = 0;
+    const list = Array.from(images);
+    return onHelpers(list, async (helper, image) => {
+      const result = await helper.call({ type: 'staff', encoderFile, decoderFile, image, cfg: cfg.toJs ? cfg.toJs({ dict_converter: Object.fromEntries }) : cfg });
+      done += 1;
+      post('log', { line: `Read staff ${done} of ${list.length}` });
+      return result;
+    });
   },
   async run(session, names, tensors, wanted) {
     const feeds = {};
@@ -85,6 +169,7 @@ self.onmessage = async ({ data }) => {
       py.FS.writeFile(path, new Uint8Array(page.bytes));
       return path;
     });
+    py.runPython('notereader_driver.preload()');
     py.globals.set('nr_paths', py.toPy(paths));
     py.globals.set('nr_crop', py.toPy(data.pages.map((p) => Boolean(p.crop))));
     const xml = await py.runPythonAsync('notereader_driver.recognize(nr_paths, nr_crop)');

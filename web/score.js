@@ -91,26 +91,50 @@ function buildModel(tk, mei) {
     }
   });
 
+  // A note can sound more than once (repeats, first/second endings): the timemap
+  // lists every time it is played. `notes` holds each written note once (for
+  // voices and editing); `events` holds every time a note sounds, in order.
   const byId = new Map();
+  const events = [];
+  const open = new Map(); // id -> events still sounding
   const measures = [];
+  const measureNumber = new Map(measureEls.map((m, i) => [m.getAttribute('xml:id'), m.getAttribute('n') || String(i + 1)]));
+  // Repeated passes are reported with ids like "abc-rend2"; they are the written element "abc".
+  const written = (id) => id.replace(/-rend\d+$/, '');
   for (const entry of timemap) {
-    if (entry.measureOn) measures.push({ q: entry.qstamp, id: entry.measureOn });
-    for (const id of entry.on || []) {
+    if (entry.measureOn) {
+      const id = written(entry.measureOn);
+      measures.push({ q: entry.qstamp, id, n: measureNumber.get(id) || '' });
+    }
+    for (const id of (entry.off || []).map(written)) {
+      const ev = open.get(id)?.shift();
+      if (ev) ev.q1 = entry.qstamp;
+    }
+    for (const id of (entry.on || []).map(written)) {
       const where = place.get(id);
       if (!where) continue;
-      const midi = tk.getMIDIValuesForElement(id);
-      if (!midi || !midi.pitch) continue;
-      byId.set(id, { id, q0: entry.qstamp, q1: null, pitch: midi.pitch, ...where, voices: [] });
-    }
-    for (const id of entry.off || []) {
-      const n = byId.get(id);
-      if (n && n.q1 === null) n.q1 = entry.qstamp;
+      let note = byId.get(id);
+      if (!note) {
+        const midi = tk.getMIDIValuesForElement(id);
+        if (!midi || !midi.pitch) continue;
+        note = { id, q0: entry.qstamp, q1: null, pitch: midi.pitch, ...where, voices: [] };
+        byId.set(id, note);
+      }
+      const ev = { id, note, q0: entry.qstamp, q1: null };
+      events.push(ev);
+      if (!open.has(id)) open.set(id, []);
+      open.get(id).push(ev);
     }
   }
+  for (const ev of events) if (ev.q1 === null || ev.q1 <= ev.q0) ev.q1 = ev.q0 + 1;
   const notes = [...byId.values()];
-  for (const n of notes) if (n.q1 === null || n.q1 <= n.q0) n.q1 = n.q0 + 1;
+  for (const n of notes) {
+    const first = events.find((ev) => ev.note === n);
+    n.q1 = first.q1; // the first time it sounds decides which voice it belongs to
+  }
   notes.sort((a, b) => a.q0 - b.q0 || b.pitch - a.pitch);
-  const endQ = notes.reduce((m, n) => Math.max(m, n.q1), 0);
+  events.sort((a, b) => a.q0 - b.q0 || b.note.pitch - a.note.pitch);
+  const endQ = events.reduce((m, ev) => Math.max(m, ev.q1), 0);
 
   // Meter → where the beats (metronome clicks) fall.
   let count = 4;
@@ -133,7 +157,7 @@ function buildModel(tk, mei) {
   if (tempoEl) tempo = Math.round(Number(attr(tempoEl, 'midi.bpm', 'mm')));
 
   const voices = assignVoices(notes, doc);
-  return { notes, byId, voices, measures, endQ, beatQ, beatsPerMeasure, tempo: tempo > 20 ? tempo : null };
+  return { notes, events, byId, voices, measures, endQ, beatQ, beatsPerMeasure, tempo: tempo > 20 ? tempo : null };
 }
 
 /**
@@ -304,4 +328,72 @@ export function editNote(mei, id, op) {
 const NOTE_NAMES = ['C', 'C♯', 'D', 'E♭', 'E', 'F', 'F♯', 'G', 'A♭', 'A', 'B♭', 'B'];
 export function pitchName(midi) {
   return `${NOTE_NAMES[midi % 12]}${Math.floor(midi / 12) - 1}`;
+}
+
+// ───── Correcting known slips in scanned scores ─────
+
+function barlineAt(doc, measure, location) {
+  let barline = [...measure.children].find((c) => c.localName === 'barline' && (c.getAttribute('location') || 'right') === location);
+  if (!barline) {
+    barline = doc.createElement('barline');
+    barline.setAttribute('location', location);
+    if (location === 'left') measure.insertBefore(barline, measure.firstChild);
+    else measure.appendChild(barline);
+  }
+  return barline;
+}
+
+/**
+ * Fixes repeat markup the recognition engine gets wrong, so repeats play correctly:
+ *  - a start-repeat sign is written on the right of its bar instead of the left
+ *    (players would then jump back to the wrong place);
+ *  - after a first ending it writes an extra empty bar (heard as a silent bar).
+ * Returns the corrected MusicXML text.
+ */
+export function tidyScan(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  if (doc.querySelector('parsererror')) return xml;
+  const parts = [...doc.querySelectorAll('part')];
+  if (!parts.length) return xml;
+
+  // 1. Start-repeat signs belong on the left of the bar.
+  for (const repeat of doc.querySelectorAll('barline repeat[direction="forward"]')) {
+    const barline = repeat.parentNode;
+    if ((barline.getAttribute('location') || 'right') === 'left') continue;
+    barlineAt(doc, barline.parentNode, 'left').appendChild(repeat);
+    if (!barline.children.length) barline.remove();
+  }
+
+  // 2. Drop bars that are empty in every part, keeping their repeat and ending marks.
+  const byPart = parts.map((p) => [...p.children].filter((c) => c.localName === 'measure'));
+  const count = Math.min(...byPart.map((m) => m.length));
+  for (let i = count - 1; i >= 0; i--) {
+    if (byPart.some((measures) => measures[i].querySelector('note'))) continue;
+    if (byPart.every((measures) => measures.length === 1)) break;
+    for (const measures of byPart) {
+      const empty = measures[i];
+      const prev = measures[i - 1];
+      const next = measures[i + 1];
+      for (const barline of [...empty.children].filter((c) => c.localName === 'barline')) {
+        const target = (barline.getAttribute('location') || 'right') === 'left' ? (next || prev) : (prev || next);
+        const where = target === next ? 'left' : 'right';
+        const into = barlineAt(doc, target, where);
+        for (const child of [...barline.children]) {
+          if (child.localName === 'bar-style' && into.querySelector('bar-style')) continue;
+          if (child.localName === 'bar-style') into.insertBefore(child, into.firstChild);
+          else into.appendChild(child);
+        }
+      }
+      // Clef, key or time changes written in the empty bar apply to the next one.
+      if (next) {
+        for (const keep of [...empty.children].filter((c) => ['attributes', 'direction'].includes(c.localName)).reverse()) {
+          next.insertBefore(keep, next.firstChild);
+        }
+      }
+      empty.remove();
+      measures.splice(i, 1);
+    }
+  }
+  for (const measures of byPart) measures.forEach((m, i) => m.setAttribute('number', String(i + 1)));
+  return new XMLSerializer().serializeToString(doc);
 }

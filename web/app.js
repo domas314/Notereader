@@ -1,4 +1,4 @@
-import { renderScore, toMEI, editNote, pitchName, getToolkit } from './score.js';
+import { renderScore, toMEI, editNote, pitchName, getToolkit, tidyScan } from './score.js';
 import { Player } from './player.js';
 import { listScores, getScore, putScore, deleteScore } from './store.js';
 import { readPages, pdfToPages, fetchLink, warmUp, isNative } from './reader.js';
@@ -177,7 +177,7 @@ async function recognize(getPages, title) {
     const pages = Array.isArray(got) ? got : got.pages;
     if (!pages.length) throw new Error('There are no pages to read.');
     const xml = await readPages(pages, { onProgress, signal });
-    await addScore(xml, got.title || title);
+    await addScore(tidyScan(xml), got.title || title);
     return true;
   } catch (err) {
     if (err.name !== 'AbortError') showScanError(err.message);
@@ -326,6 +326,10 @@ async function lookForUpdate(manual = false) {
 async function setupUpdates() {
   const info = await installedVersion();
   $('versionText').textContent = info ? `Version ${info.version}` : 'Development copy';
+  const cores = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+  $('engineInfo').textContent = cores > 1
+    ? `Music reading uses ${cores} processor cores.`
+    : 'Music reading uses 1 processor core (this phone’s browser engine does not allow more).';
   $('checkUpdateBtn').hidden = !info;
   $('checkUpdateBtn').onclick = () => lookForUpdate(true);
   if (!info || !isNative()) return; // in a browser the page itself is always current
@@ -524,7 +528,7 @@ let wakeLock = null;
 let userScrolledAt = 0;
 
 function resetHighlight() {
-  for (const id of lit) document.getElementById(id)?.classList.remove('playing');
+  for (const ev of lit) document.getElementById(ev.id)?.classList.remove('playing');
   lit = new Set();
   cursorIndex = 0;
   lastQ = -1;
@@ -543,21 +547,21 @@ function frame() {
   if (q < lastQ) resetHighlight();
   lastQ = q;
 
-  const notes = model.notes;
-  while (cursorIndex < notes.length && notes[cursorIndex].q0 <= q + 1e-6) {
-    const n = notes[cursorIndex++];
-    if (n.q1 > q && audible(n)) {
-      lit.add(n.id);
-      document.getElementById(n.id)?.classList.add('playing');
+  // `lit` holds the sounding events; a note under a repeat can sound more than once.
+  const events = model.events;
+  while (cursorIndex < events.length && events[cursorIndex].q0 <= q + 1e-6) {
+    const ev = events[cursorIndex++];
+    if (ev.q1 > q && audible(ev.note)) {
+      lit.add(ev);
+      document.getElementById(ev.id)?.classList.add('playing');
     }
   }
   let first = null;
-  for (const id of lit) {
-    const n = model.byId.get(id);
-    if (n.q1 <= q + 1e-6) {
-      lit.delete(id);
-      document.getElementById(id)?.classList.remove('playing');
-    } else if (!first) first = id;
+  for (const ev of lit) {
+    if (ev.q1 <= q + 1e-6) {
+      lit.delete(ev);
+      if (![...lit].some((o) => o.id === ev.id)) document.getElementById(ev.id)?.classList.remove('playing');
+    } else if (!first) first = ev.id;
   }
 
   // Count-in display and position read-out.
@@ -571,7 +575,7 @@ function frame() {
   if (!seeking) $('seek').value = Math.max(0, q);
   let bar = 0;
   while (bar + 1 < model.measures.length && model.measures[bar + 1].q <= q + 1e-6) bar++;
-  $('measureLabel').textContent = `bar ${bar + 1}/${Math.max(1, model.measures.length)}`;
+  $('measureLabel').textContent = `bar ${model.measures[bar]?.n || bar + 1}`;
 
   if (first && player.playing && Date.now() - userScrolledAt > 2500) follow(first);
 }
@@ -599,7 +603,11 @@ async function togglePlay() {
     closeEditor();
     userScrolledAt = 0;
     player.play();
-    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* optional */ }
+    // Keep the screen on while playing; don't wait for it (it can be slow to answer).
+    navigator.wakeLock?.request('screen').then((lock) => {
+      if (player.playing) wakeLock = lock;
+      else lock.release().catch(() => {});
+    }, () => {});
   }
   syncTransport();
 }
@@ -651,8 +659,12 @@ function onScoreTap(e) {
   if (!model) return;
   const id = noteAt(e.clientX, e.clientY);
   if (!id) return closeEditor();
-  const n = model.byId.get(id);
-  player.seek(n.q0);
+  // Under a repeat the same note sounds several times: go to the time it sounds
+  // next from here (or the first time, if it doesn't come again).
+  const times = model.events.filter((ev) => ev.id === id);
+  const here = player.currentQ();
+  const next = times.find((ev) => ev.q0 >= here - 1e-6) || times[0];
+  if (next) player.seek(next.q0);
   if (!player.playing) selectNote(id);
 }
 
@@ -800,8 +812,8 @@ function init() {
     const bar = [...model.measures].reverse().find((m) => m.q <= q + 1e-6);
     player.seek(bar ? bar.q : q);
     seeking = false;
-    const note = model.notes.find((n) => n.q0 >= player.posQ - 1e-6);
-    if (note) follow(note.id);
+    const ev = model.events.find((e) => e.q0 >= player.posQ - 1e-6);
+    if (ev) follow(ev.id);
   });
 
   $('score').addEventListener('click', onScoreTap);

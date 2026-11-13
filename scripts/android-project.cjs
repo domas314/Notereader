@@ -13,7 +13,23 @@ if (!manifest.includes('usesCleartextTraffic')) {
 }
 fs.writeFileSync(manifestFile, manifest);
 
-// 2. Version, signing and packaging.
+// 2. Let the reading engine use several processor cores. Browsers only allow that
+//    on "cross-origin isolated" pages, which needs two response headers on the
+//    app's own files. Capacitor's local file server has no setting for extra
+//    headers, so they are added to its source (inside node_modules) at build time.
+//    Where the device's WebView does not support this, the engine uses one core.
+const serverFile = 'node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/WebViewLocalServer.java';
+let server = fs.readFileSync(serverFile, 'utf8');
+const anchor = 'tempResponseHeaders.put("Cache-Control", "no-cache");';
+if (!server.includes('Cross-Origin-Embedder-Policy')) {
+  if (!server.includes(anchor)) throw new Error(`Capacitor changed: "${anchor}" not found in ${serverFile}`);
+  server = server.replace(anchor, `${anchor}
+            tempResponseHeaders.put("Cross-Origin-Opener-Policy", "same-origin"); // notereader
+            tempResponseHeaders.put("Cross-Origin-Embedder-Policy", "require-corp"); // notereader`);
+  fs.writeFileSync(serverFile, server);
+}
+
+// 3. Version, signing and packaging.
 //    Every build must be signed with the same key, otherwise Android refuses to
 //    install a new version over the old one. The key lives in android-signing/.
 const build = Number(process.env.BUILD_NUMBER || 0);
@@ -45,7 +61,7 @@ android {
   fs.writeFileSync(gradleFile, gradle);
 }
 
-// 3. Tell the app which version it is and where to look for newer ones.
+// 4. Tell the app which version it is and where to look for newer ones.
 if (build > 0) {
   // Public repository whose releases the app checks for updates.
   const repo = process.env.UPDATE_REPO || process.env.GITHUB_REPOSITORY || '';

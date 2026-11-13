@@ -97,7 +97,7 @@ export class Player {
     });
 
     const startQ = this.posQ;
-    const { beatQ, beatsPerMeasure, measures, endQ, notes } = this.model;
+    const { beatQ, beatsPerMeasure, measures, endQ, events: notes } = this.model;
     const lead = this.countIn ? beatsPerMeasure * beatQ : 0;
     this.startQ = startQ;
     this.anchorQ = startQ - lead;
@@ -129,15 +129,15 @@ export class Player {
     if (!this.playing) return;
     const now = this.ctx.currentTime;
     const horizonQ = this.anchorQ + (now + LOOKAHEAD_S - this.anchorT) / this.secPerQ();
-    const { notes, endQ } = this.model;
+    const { events: notes, endQ } = this.model;
 
     while (this.noteIndex < notes.length && notes[this.noteIndex].q0 < horizonQ) {
-      const n = notes[this.noteIndex++];
-      const t = Math.max(this.timeOfQ(n.q0), now);
-      const dur = (n.q1 - n.q0) * this.secPerQ();
-      for (const v of n.voices) {
+      const ev = notes[this.noteIndex++];
+      const t = Math.max(this.timeOfQ(ev.q0), now);
+      const dur = (ev.q1 - ev.q0) * this.secPerQ();
+      for (const v of ev.note.voices) {
         const s = this.voiceSettings[v.index];
-        if (s.vol > 0) this.playNote(n.pitch + 12 * s.oct, t, dur, this.voiceGains[v.index]);
+        if (s.vol > 0) this.playNote(ev.note.pitch + 12 * s.oct, t, dur, this.voiceGains[v.index]);
       }
     }
     while (this.clickIndex < this.clicks.length && this.clicks[this.clickIndex].q < horizonQ) {
