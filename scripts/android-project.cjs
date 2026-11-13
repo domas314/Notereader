@@ -47,7 +47,8 @@ android {
 
 // 3. Tell the app which version it is and where to look for newer ones.
 if (build > 0) {
-  const repo = process.env.GITHUB_REPOSITORY || '';
+  // Public repository whose releases the app checks for updates.
+  const repo = process.env.UPDATE_REPO || process.env.GITHUB_REPOSITORY || '';
   fs.writeFileSync('web/version.json', JSON.stringify({ version, build, repo }) + '\n');
   console.log(`version.json: ${version} (${repo})`);
 } else {

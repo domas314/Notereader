@@ -1,7 +1,6 @@
-// Update check against the app's GitHub repository.
-//
-// Each published build is a GitHub release tagged "v1.<build number>" with
-// Notereader.apk attached. The installed app compares its own build number
+// Update check against the public update repository on GitHub (set at build
+// time, see scripts/android-project.cjs). Each published build is a release
+// tagged "v1.<build number>" with Notereader.apk attached. The installed app compares its own build number
 // (version.json, written when the app is built) with the latest release.
 
 /** @returns {Promise<{version: string, build: number, repo: string} | null>} */
@@ -33,7 +32,7 @@ export async function checkForUpdate() {
     throw new Error('Could not reach GitHub. Check your connection.');
   }
   if (res.status === 404) {
-    throw new Error(`No published version found at github.com/${info.repo}. Update checks need the repository to be public.`);
+    throw new Error(`No published version found yet at github.com/${info.repo}.`);
   }
   if (!res.ok) throw new Error(`GitHub answered with an error (${res.status}). Try again later.`);
   const release = await res.json();

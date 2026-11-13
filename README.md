@@ -24,16 +24,24 @@ played on the device and never uploaded.
 
 ## Install (Android)
 
-Open this repository's **Releases** page on the phone, download `Notereader.apk` from the
-newest release and open it. Android asks once to allow installing from that source.
-The app is about 200 MB because it carries the recognition engine and its models.
+Open the releases of the update repository
+[domas314/Checkupdate](https://github.com/domas314/Checkupdate/releases) on the phone,
+download `Notereader.apk` from the newest release and open it. Android asks once to allow
+installing from that source. The app is about 200 MB because it carries the recognition
+engine and its models.
 
-**Updates.** The app looks at this repository's latest release when it starts. If there
-is a newer version it shows *Update available → Download*; open the downloaded file to
-install it over the old one (saved scores are kept). You can also check by hand under
-the sliders icon → *Check for updates*.
-Update checks need the repository to be **public** – a private repository cannot be
-read by the app.
+**Updates.** The app looks at Checkupdate's latest release when it starts. If there is a
+newer version it shows *Update available → Download*; open the downloaded file to install
+it over the old one (saved scores are kept). You can also check by hand under the sliders
+icon → *Check for updates*.
+
+**Publishing.** Every push here builds the APK and publishes it as release `v1.<build>` of
+Checkupdate. That needs one secret in this repository (Settings → Secrets and variables →
+Actions): `CHECKUPDATE_TOKEN`, a
+[fine-grained token](https://github.com/settings/personal-access-tokens/new) with access to
+*only* `domas314/Checkupdate` and the permission *Contents: Read and write*. Without it the
+build is published as a release of this repository instead, where installed apps don't see it.
+To change the update repository, edit `UPDATE_REPO` in `.github/workflows/android.yml`.
 
 ## How reading works
 
@@ -46,9 +54,9 @@ processor). Keep the app open while it works; the screen is kept awake.
 | `web/omr/` | On-device recognition: runs [homr](https://github.com/liebharc/homr) (Python) in [Pyodide](https://pyodide.org), with its neural networks executed by [ONNX Runtime Web](https://onnxruntime.ai). |
 | `web/reader.js` | Turns photos, PDFs ([pdf.js](https://mozilla.github.io/pdf.js/)) and web links into pages for the engine. |
 | `web/score.js`, `web/player.js` | Engraving with [Verovio](https://www.verovio.org), voice splitting, and the tempo-locked Web Audio player. |
-| `web/update.js` | Update check against this repository's releases. |
+| `web/update.js` | Update check against the Checkupdate repository's releases. |
 | `web/engine/` | The engine's large files (~195 MB). Not stored in the repository: `npm run engine` downloads them from the projects' public releases. |
-| `.github/workflows/android.yml` | Builds the APK on every push and publishes it as release `v1.<build>`. |
+| `.github/workflows/android.yml` | Builds the APK on every push and publishes it to Checkupdate as release `v1.<build>`. |
 
 It needs a current Android System WebView / Chrome (version 137 or newer).
 

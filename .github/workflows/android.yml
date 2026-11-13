@@ -1,7 +1,12 @@
 name: Android app
 
-# Builds the installable app and publishes it as a release. The installed app
-# looks at the latest release of this repository to find out about updates.
+# Builds the installable app and publishes it as a release of the public update
+# repository (UPDATE_REPO). The installed app looks at that repository's latest
+# release to find out about updates.
+#
+# Publishing there needs the secret CHECKUPDATE_TOKEN: a fine-grained GitHub token
+# with "Contents: Read and write" on UPDATE_REPO only. Without it, the build is
+# published as a release of this repository instead, and installed apps don't see it.
 
 on:
   push:
@@ -24,6 +29,7 @@ jobs:
     timeout-minutes: 40
     env:
       BUILD_NUMBER: ${{ github.run_number }}
+      UPDATE_REPO: domas314/Checkupdate
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,14 +52,20 @@ jobs:
           name: Notereader-android
           path: Notereader.apk
           compression-level: 0
-      - name: Publish the release
+      - name: Publish the update
         if: github.ref_name == github.event.repository.default_branch
         env:
+          CHECKUPDATE_TOKEN: ${{ secrets.CHECKUPDATE_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete android-latest --yes --cleanup-tag || true
-          gh release create "v1.${BUILD_NUMBER}" Notereader.apk \
-            --target "$GITHUB_SHA" \
-            --latest \
-            --title "Notereader 1.${BUILD_NUMBER}" \
-            --notes "Download Notereader.apk on your phone and open it to install or update. Built from ${GITHUB_SHA::7}."
+          title="Notereader 1.${BUILD_NUMBER}"
+          notes="Download Notereader.apk on your phone and open it to install or update."
+          if [ -n "$CHECKUPDATE_TOKEN" ]; then
+            GH_TOKEN="$CHECKUPDATE_TOKEN" gh release create "v1.${BUILD_NUMBER}" Notereader.apk \
+              --repo "$UPDATE_REPO" --target main --latest --title "$title" --notes "$notes"
+            echo "Published to https://github.com/$UPDATE_REPO/releases/tag/v1.${BUILD_NUMBER}"
+          else
+            echo "::warning title=Update not published to $UPDATE_REPO::Add the CHECKUPDATE_TOKEN secret (see the top of this workflow). Installed apps will not see this build."
+            gh release create "v1.${BUILD_NUMBER}" Notereader.apk \
+              --target "$GITHUB_SHA" --latest --title "$title" --notes "$notes"
+          fi
