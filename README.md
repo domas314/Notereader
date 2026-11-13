@@ -14,6 +14,8 @@ played on the device and never uploaded.
   can be Full, Quiet or Off. "Only" solos one voice; "Lead" keeps the others quietly
   underneath. Works for open scores (one staff per voice) and closed scores
   (two voices sharing a staff). Each voice can be shifted by an octave.
+- **Sound** – sung parts play as a recorded choir ("aah"), the piano as a recorded grand piano.
+  Under Voices you can switch to piano for everything (clearest for learning notes) or simple tones.
 - **Tempo** – 30–220 bpm, changeable while playing, with optional metronome click and
   a one-bar count-in. Playback is scheduled on the audio clock, so it does not drift.
 - **Follow along** – sounding notes light up in the voice's colour and the score scrolls
@@ -106,7 +108,10 @@ address, or download it and use *Photos / PDF*.
 - Hymn-style scores (Soprano + Alto on one staff, Tenor + Bass on another) are read as four
   voices, also when the barlines are not drawn through both staves.
 - A piano or organ accompaniment is recognised when it is written on a braced pair of staves
-  below the voices; it then appears as "Piano right hand" / "Piano left hand" next to the voices.
+  below the voices; it then appears as one "Piano" entry next to the voices.
+- Scans carry no part names, so parts are named by layout: four lines are Soprano, Alto,
+  Tenor, Bass; three are Soprano, Alto, Baritone (or Soprano 1, Soprano 2, Alto when all
+  three are high). Tap a name under Voices to rename it.
 - Scores scanned before repeats were fixed may have their start-repeat sign in the wrong
   place; scan them again.
 - Lyrics, dynamics and tempo changes inside the piece are not read.
@@ -127,3 +132,7 @@ it more widely, replace it with a key kept in a GitHub Actions secret.
 homr is AGPL-3.0 and is shipped inside the app unmodified, so the app as a whole must be
 offered under AGPL-compatible terms with its source available (this repository).
 Verovio is LGPL-3.0; Pyodide is MPL-2.0; ONNX Runtime and pdf.js are MIT / Apache-2.0.
+
+Sounds: the piano is the Salamander Grand Piano V3 by Alexander Holm (CC BY 3.0, via
+`@audio-samples/piano-mp3-velocity8`); the choir is "Choir Aahs" from the MusyngKite sound font
+(CC BY-SA 3.0, via midi-js-soundfonts / `web-music-score-samples`).

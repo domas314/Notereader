@@ -380,7 +380,14 @@ async function drawScore(firstOpen = false) {
   model = result.model;
   $('score').innerHTML = result.pages.join('');
 
-  // Keep saved voice choices; fill in defaults for anything new.
+  // Keep saved voice choices; fill in defaults for anything new. If the voices
+  // themselves changed (e.g. after an update that reads the score differently),
+  // the old choices no longer line up, so start afresh.
+  const signature = model.voices.map((v) => v.name).join('|');
+  if (s.voiceSignature !== signature) {
+    if (s.voiceSignature !== undefined || (s.voices && s.voices.length !== model.voices.length)) s.voices = [];
+    s.voiceSignature = signature;
+  }
   const saved = s.voices || [];
   s.voices = model.voices.map((v, i) => ({
     name: saved[i]?.name || v.name,
@@ -389,13 +396,14 @@ async function drawScore(firstOpen = false) {
   }));
   model.voices.forEach((v, i) => (v.name = s.voices[i].name));
   s.bpm ??= model.tempo || 84;
-  s.sound ??= 'choir';
+  if (s.sound === 'choir' || s.sound === 'organ' || !s.sound) s.sound = 'real'; // older versions' choices
   s.metronome ??= false;
   s.countIn ??= true;
 
   player.load(model, s.voices);
   player.bpm = s.bpm;
   player.sound = s.sound;
+  player.loadSounds(); // start loading the recorded instruments
   player.metronome = s.metronome;
   player.countIn = s.countIn;
 
@@ -602,6 +610,12 @@ async function togglePlay() {
   } else {
     closeEditor();
     userScrolledAt = 0;
+    if (!player.samplers && player.sound !== 'tones') {
+      const slow = setTimeout(() => toast('Loading sounds…'), 300);
+      await player.loadSounds();
+      clearTimeout(slow);
+      if (player.playing) return;
+    }
     player.play();
     // Keep the screen on while playing; don't wait for it (it can be slow to answer).
     navigator.wakeLock?.request('screen').then((lock) => {
@@ -646,7 +660,7 @@ function selectNote(id, sound = true) {
   const vs = settings().voices[n.voices[0].index];
   $('editLabel').textContent = `${n.voices.map((v) => v.name).join(' + ')} · ${pitchName(n.pitch + 12 * vs.oct)}`;
   $('editBar').hidden = false;
-  if (sound) player.preview(n.pitch + 12 * vs.oct);
+  if (sound) player.preview(n.pitch + 12 * vs.oct, n.voices[0].keyboard);
 }
 
 function closeEditor() {

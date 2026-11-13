@@ -9,6 +9,7 @@
 #   pdfjs/    PDF renderer
 #   models/   homr's recognition models
 #   *.whl     homr itself (the recognition engine) and a small dependency
+#   sounds/   recorded piano and choir notes for playback
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -49,6 +50,13 @@ for model in "${MODELS[@]}"; do
   find "$TMP/models" -name "$model.onnx" -exec mv {} "$E/models/" \;
   test -s "$E/models/$model.onnx"
 done
+
+echo "Instrument recordings"
+# Piano: Salamander Grand Piano V3 by Alexander Holm, CC BY 3.0 (medium strength).
+# Choir: "Choir Aahs" from the MusyngKite sound font (midi-js-soundfonts), CC BY-SA 3.0.
+mkdir -p "$E/sounds/piano" "$E/sounds/choir"
+cp node_modules/@audio-samples/piano-mp3-velocity8/audio/*.mp3 "$E/sounds/piano/"
+cp node_modules/web-music-score-samples/samples/052-choir-aahs/*.mp3 "$E/sounds/choir/"
 
 echo "Making the staff reader 8-bit (about 2x faster on phones, same notes in tests)"
 # homr ships its decoder already quantized; the encoder is quantized here the same

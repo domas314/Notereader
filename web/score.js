@@ -259,40 +259,49 @@ function assignVoices(notes, doc) {
     }
   }
 
-  // Names: four singing lines are almost always soprano, alto, tenor, bass.
-  const singers = voices.filter((v) => !v.keyboard);
-  const satb = ['Soprano', 'Alto', 'Tenor', 'Bass'];
   const generic = (label) => !label || /^(voice|part|staff|choir|unnamed)\b/i.test(label) || /^\W*$/.test(label);
+  const median = (v) => {
+    const pitches = v.notes.map((n) => n.pitch).sort((a, b) => a - b);
+    return pitches[Math.floor(pitches.length / 2)] || 60;
+  };
+
+  // A piano is one instrument: its staves (right and left hand) become one entry.
+  const merged = [];
+  for (const v of voices) {
+    if (!v.keyboard) { merged.push(v); continue; }
+    const name = generic(v.label) ? 'Piano' : v.label;
+    const same = merged.find((m) => m.keyboard && m.name === name);
+    if (!same) { v.name = name; merged.push(v); continue; }
+    for (const n of v.notes) {
+      n.voices = [...new Set(n.voices.map((x) => (x === v ? same : x)))];
+      same.notes.push(n);
+    }
+  }
+  voices.splice(0, voices.length, ...merged);
+
+  // Names for the singing lines, from the top staff down. Scans carry no part
+  // names, so they follow the usual choir layouts:
+  //   4 lines: Soprano, Alto, Tenor, Bass
+  //   3 lines: Soprano, Alto, Baritone (SAB) when the lowest is a low line,
+  //            otherwise Soprano 1, Soprano 2, Alto (SSA)
+  const singers = voices.filter((v) => !v.keyboard);
+  let names = singers.map((_, i) => `Voice ${i + 1}`);
+  if (singers.length === 4) names = ['Soprano', 'Alto', 'Tenor', 'Bass'];
+  else if (singers.length === 3) {
+    names = median(singers[2]) < 57 ? ['Soprano', 'Alto', 'Baritone'] : ['Soprano 1', 'Soprano 2', 'Alto'];
+  }
   singers.forEach((v, i) => {
     const shared = singers.filter((o) => o.staff === v.staff).length > 1;
-    if (singers.length === 4) v.name = !shared && !generic(v.label) ? v.label : satb[i];
-    else if (!shared && !generic(v.label)) v.name = v.label;
-    else v.name = `Voice ${i + 1}`;
+    v.name = !shared && !generic(v.label) ? v.label : names[i];
   });
-  const keyboards = voices.filter((v) => v.keyboard);
-  // Keyboard staves: "Piano right hand" / "Piano left hand" for a pair.
-  const byInstrument = new Map();
-  for (const v of keyboards) {
-    const name = generic(v.label) ? 'Piano' : v.label;
-    if (!byInstrument.has(name)) byInstrument.set(name, []);
-    byInstrument.get(name).push(v);
-  }
-  for (const [name, staves] of byInstrument) {
-    staves.forEach((v, i) => {
-      if (staves.length === 1) v.name = name;
-      else if (staves.length === 2) v.name = `${name} ${i === 0 ? 'right hand' : 'left hand'}`;
-      else v.name = `${name} ${i + 1}`;
-    });
-  }
 
   voices.forEach((v, i) => {
     v.index = i;
     v.color = VOICE_COLORS[i % VOICE_COLORS.length];
     // A tenor line written in treble clef sounds an octave lower than written.
     // Scans often miss the little "8" under the clef, so suggest the fix.
-    const pitches = v.notes.map((n) => n.pitch).sort((a, b) => a - b);
-    const median = pitches[Math.floor(pitches.length / 2)] || 60;
-    v.suggestedOctave = /tenor/i.test(v.name) && median >= 66 ? -1 : /bass/i.test(v.name) && median >= 64 ? -1 : 0;
+    const middle = median(v);
+    v.suggestedOctave = /tenor/i.test(v.name) && middle >= 66 ? -1 : /bass|baritone/i.test(v.name) && middle >= 64 ? -1 : 0;
   });
   return voices;
 }
