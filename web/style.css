@@ -116,6 +116,8 @@ svg { display: block; }
 .link-choices ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .link-choices button { width: 100%; min-height: 44px; padding: 8px 12px; text-align: left; border: 1px solid var(--line); border-radius: 10px; background: none; font-weight: 600; overflow-wrap: anywhere; }
 .install-card { display: flex; align-items: center; gap: 10px; padding: 12px 8px 12px 16px; background: var(--accent-soft); border-radius: var(--radius); }
+.about-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.install-card { padding-right: 12px; }
 .install-card > div { flex: 1; min-width: 0; }
 
 /* ───── Player ───── */

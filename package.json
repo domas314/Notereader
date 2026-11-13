@@ -4,7 +4,9 @@
   "private": true,
   "description": "Builds the installable Android app from the web app in web/",
   "scripts": {
-    "android:prepare": "cap add android && capacitor-assets generate --android --iconBackgroundColor '#1f5c4d' --iconBackgroundColorDark '#1f5c4d' --splashBackgroundColor '#f1ede4' --splashBackgroundColorDark '#171918' && node scripts/android-manifest.cjs && cap sync android",
+    "engine": "bash scripts/fetch-engine.sh",
+    "serve": "python3 -m http.server 8080 --directory web",
+    "android:prepare": "cap add android && capacitor-assets generate --android --iconBackgroundColor '#1f5c4d' --iconBackgroundColorDark '#1f5c4d' --splashBackgroundColor '#f1ede4' --splashBackgroundColorDark '#171918' && node scripts/android-project.cjs && cap sync android",
     "android:build": "cd android && ./gradlew assembleDebug --no-daemon"
   },
   "devDependencies": {
@@ -12,6 +14,8 @@
     "@capacitor/assets": "^4.0.0",
     "@capacitor/cli": "^8.6.2",
     "@capacitor/core": "^8.6.2",
-    "@capgo/capacitor-updater": "^8.54.2"
+    "pyodide": "314.0.7",
+    "onnxruntime-web": "1.31.1",
+    "pdfjs-dist": "6.5.438"
   }
 }

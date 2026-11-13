@@ -6,3 +6,5 @@ node_modules/
 .DS_Store
 android/
 package-lock.json
+web/engine/
+web/version.json

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Assembles web/engine/: everything the app needs to read sheet music on the
+# device itself. These files are large (~190 MB) and come from public releases,
+# so they are downloaded at build time instead of being stored in this repository.
+#
+#   pyodide/  Python runtime for the browser, with numpy, OpenCV and Pillow
+#   ort/      ONNX Runtime Web (runs the neural networks)
+#   pdfjs/    PDF renderer
+#   models/   homr's recognition models
+#   *.whl     homr itself (the recognition engine) and a small dependency
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+HOMR_VERSION=0.7.1
+# Model names belong to the homr version above (see homr/main.py: download_weights).
+MODELS=(
+  segnet_308-3296ccd40960f90ca6ab9c035cca945675d30a0f
+  encoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31
+  decoder_pytorch_model_509-2293bba14bfea47d9d28411339362af15fce4c31
+)
+
+E=web/engine
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+rm -rf "$E"
+mkdir -p "$E/pyodide" "$E/ort" "$E/pdfjs" "$E/models"
+
+echo "Pyodide"
+PYODIDE_VERSION=$(node -p "require('pyodide/package.json').version")
+cp node_modules/pyodide/{pyodide.mjs,pyodide.asm.mjs,pyodide.asm.wasm,python_stdlib.zip,pyodide-lock.json} "$E/pyodide/"
+curl -fsSL --retry 3 "https://github.com/pyodide/pyodide/releases/download/${PYODIDE_VERSION}/pyodide-${PYODIDE_VERSION}.tar.bz2" \
+  | tar -xj -C "$E" --wildcards 'pyodide/numpy-*.whl' 'pyodide/opencv_python-*.whl' 'pyodide/pillow-*.whl'
+
+echo "ONNX Runtime Web and pdf.js"
+cp node_modules/onnxruntime-web/dist/{ort.wasm.min.mjs,ort-wasm-simd-threaded.mjs,ort-wasm-simd-threaded.wasm} "$E/ort/"
+cp node_modules/pdfjs-dist/build/{pdf.min.mjs,pdf.worker.min.mjs} "$E/pdfjs/"
+cp -r node_modules/pdfjs-dist/wasm "$E/pdfjs/wasm"
+
+echo "homr ${HOMR_VERSION}"
+python3 -m pip download --quiet --no-deps --dest "$TMP" "homr==${HOMR_VERSION}" "typing_extensions==4.15.0"
+cp "$TMP"/homr-*.whl "$E/homr.whl"
+cp "$TMP"/typing_extensions-*.whl "$E/typing_extensions.whl"
+
+echo "Recognition models"
+for model in "${MODELS[@]}"; do
+  curl -fsSL --retry 3 -o "$TMP/$model.zip" "https://github.com/liebharc/homr/releases/download/onnx_checkpoints/$model.zip"
+  unzip -q -o "$TMP/$model.zip" -d "$TMP/models"
+  find "$TMP/models" -name "$model.onnx" -exec mv {} "$E/models/" \;
+  test -s "$E/models/$model.onnx"
+done
+
+du -sh "$E"

@@ -1,23 +1,29 @@
 name: Android app
 
+# Builds the installable app and publishes it as a release. The installed app
+# looks at the latest release of this repository to find out about updates.
+
 on:
   push:
     paths:
       - "web/**"
       - "assets/**"
       - "scripts/**"
+      - "android-signing/**"
       - "package.json"
       - "capacitor.config.json"
       - ".github/workflows/android.yml"
   workflow_dispatch:
 
 permissions:
-  contents: write # to attach the APK to a release
+  contents: write # to publish the release
 
 jobs:
   apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,22 +34,26 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: npm install --no-audit --no-fund
+      - name: Download the on-device reading engine
+        run: npm run engine
       - name: Create the Android project from web/
         run: npm run android:prepare
       - name: Build the APK
         run: npm run android:build
-      - run: cp android/app/build/outputs/apk/debug/app-debug.apk Notereader.apk
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk Notereader.apk && ls -la Notereader.apk
       - uses: actions/upload-artifact@v4
         with:
           name: Notereader-android
           path: Notereader.apk
-      - name: Publish the APK as the "android-latest" release
+          compression-level: 0
+      - name: Publish the release
         if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete android-latest --yes --cleanup-tag || true
-          gh release create android-latest Notereader.apk \
+          gh release create "v1.${BUILD_NUMBER}" Notereader.apk \
             --target "$GITHUB_SHA" \
-            --title "Notereader for Android (latest build)" \
-            --notes "Download Notereader.apk on your phone and open it to install. Built from ${GITHUB_SHA::7}."
+            --latest \
+            --title "Notereader 1.${BUILD_NUMBER}" \
+            --notes "Download Notereader.apk on your phone and open it to install or update. Built from ${GITHUB_SHA::7}."

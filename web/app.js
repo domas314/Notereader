@@ -1,6 +1,8 @@
 import { renderScore, toMEI, editNote, pitchName, getToolkit } from './score.js';
 import { Player } from './player.js';
 import { listScores, getScore, putScore, deleteScore } from './store.js';
+import { readPages, pdfToPages, fetchLink, warmUp, isNative } from './reader.js';
+import { checkForUpdate, installedVersion } from './update.js';
 
 const $ = (id) => document.getElementById(id);
 const LEVELS = { off: 0, soft: 0.2, full: 1 };
@@ -110,6 +112,7 @@ async function handleFiles(files) {
     const blob = pdf ? file : await preparePhoto(file);
     pending.push({ blob, name: file.name, pdf, url: pdf ? null : URL.createObjectURL(blob) });
   }
+  if (pending.length) warmUp();
   renderTray();
 }
 
@@ -146,95 +149,100 @@ function showScanError(text) {
   $('scanError').hidden = false;
 }
 
-const serverBase = () => (localStorage.getItem('server') || '').replace(/\/+$/, '');
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/** In the installed Android app there is no built-in server: one must be set in Settings. */
-const isNative = () => Boolean(window.Capacitor?.isNativePlatform?.());
-
-/** Sends a recognition request, follows the job to the end and opens the result. */
-async function recognize(request, sendingText) {
+/**
+ * Reads pages into a score, on this device. `getPages` produces the page images
+ * (it may itself take a while, e.g. rendering a PDF). Resolves true on success.
+ */
+async function recognize(getPages, title) {
   $('scanError').hidden = true;
   $('tray').hidden = true;
   $('linkChoices').hidden = true;
   $('progress').hidden = false;
-  $('progressTitle').textContent = sendingText;
-  $('progressDetail').textContent = 'This can take a minute per page.';
+  $('progressTitle').textContent = 'Reading the music…';
+  const started = Date.now();
+  let stage = 'Getting ready';
+  const showStage = () => {
+    const s = Math.round((Date.now() - started) / 1000);
+    $('progressDetail').textContent = `${stage} · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+  const onProgress = (text) => { stage = text; showStage(); };
+  const clock = setInterval(showStage, 1000);
+  showStage();
   scanAbort = new AbortController();
   const signal = scanAbort.signal;
+  let lock = null;
   try {
-    if (isNative() && !serverBase()) {
-      throw new Error('Set the address of your Notereader server in Settings (the sliders icon) first.');
-    }
-    let res;
-    try {
-      res = await fetch(`${serverBase()}${request.path}`, { method: 'POST', signal, ...request.init });
-    } catch (err) {
-      if (signal.aborted) throw err;
-      throw new Error('Could not reach the recognition server. Check your connection, or the server address in Settings.');
-    }
-    const body = await res.json().catch(() => null);
-    if (!res.ok || !body) {
-      throw new Error(typeof body?.detail === 'string' ? body.detail : !body || res.status === 404 || res.status === 405
-        ? 'This address has no recognition server. Set its address in Settings.'
-        : `The server refused the request (${res.status}).`);
-    }
-    if (body.choices) return body.choices;
-    let job = body;
-    $('progressTitle').textContent = 'Reading the music…';
-    while (job.status === 'queued' || job.status === 'running') {
-      await sleep(1500);
-      if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
-      job = await fetch(`${serverBase()}/api/jobs/${job.id}`, { signal }).then((r) => r.json());
-      $('progressDetail').textContent = job.status === 'queued' ? 'Waiting for the server…' : job.message || '';
-    }
-    if (job.status !== 'done') throw new Error(job.error || 'The music could not be read.');
-    const xml = await fetch(`${serverBase()}/api/jobs/${job.id}/musicxml`, { signal }).then((r) => r.text());
-    const fromLink = body.source && decodeURIComponent(body.source.split(/[?#]/)[0].split('/').pop() || '')
-      .replace(/\.\w{2,5}$/, '').replace(/[-_]+/g, ' ').trim();
-    await addScore(xml, request.title || fromLink || undefined);
+    lock = await navigator.wakeLock?.request('screen').catch(() => null); // reading takes minutes
+    const got = await getPages({ onProgress, signal });
+    const pages = Array.isArray(got) ? got : got.pages;
+    if (!pages.length) throw new Error('There are no pages to read.');
+    const xml = await readPages(pages, { onProgress, signal });
+    await addScore(xml, got.title || title);
     return true;
   } catch (err) {
     if (err.name !== 'AbortError') showScanError(err.message);
     return false;
   } finally {
+    clearInterval(clock);
+    lock?.release().catch(() => {});
     $('progress').hidden = true;
     scanAbort = null;
     renderTray();
   }
 }
 
+const photoPage = async (blob) => ({ bytes: await blob.arrayBuffer(), ext: blob.type === 'image/png' ? 'png' : 'jpg' });
+
 async function readMusic() {
   if (!pending.length) return;
-  const form = new FormData();
-  pending.forEach((p, i) => form.append('files', p.blob, p.pdf ? p.name : `page-${i + 1}.jpg`));
-  const done = await recognize({ path: '/api/recognize', init: { body: form } }, 'Sending pages…');
-  if (done === true) {
+  const items = [...pending];
+  const done = await recognize(async (options) => {
+    const pages = [];
+    for (const item of items) {
+      if (item.pdf) pages.push(...await pdfToPages(await item.blob.arrayBuffer(), options));
+      else pages.push(await photoPage(item.blob));
+    }
+    return pages;
+  }, items.length === 1 && items[0].pdf ? items[0].name.replace(/\.pdf$/i, '') : undefined);
+  if (done) {
     for (const p of pending) if (p.url) URL.revokeObjectURL(p.url);
     pending = [];
     renderTray();
   }
 }
 
-/** Reads music from a web address: a PDF, or a page that links to PDFs. */
+const titleFromUrl = (url) => {
+  let name = '';
+  try { name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || ''); } catch { /* no title */ }
+  return /\.pdf$/i.test(name) ? name.replace(/\.pdf$/i, '').replace(/[-_]+/g, ' ').trim() : undefined;
+};
+
+/** Reads music from a web address: a PDF, an image, or a page that links to PDFs. */
 async function readLink(url, title) {
   url = url.trim();
   if (!url) return;
-  const fallback = title || decodeURIComponent(url.split(/[?#]/)[0].split('/').filter(Boolean).pop() || '')
-    .replace(/\.pdf$/i, '').replace(/[-_]+/g, ' ').trim();
-  const result = await recognize({
-    path: '/api/recognize-url',
-    title: fallback && !/^[\w-]+(\.[\w-]+)+$/.test(fallback) ? fallback : undefined,
-    init: { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) },
-  }, 'Fetching the link…');
-  if (result === true) {
+  let choices = null;
+  const done = await recognize(async (options) => {
+    options.onProgress('Fetching the link');
+    const found = await fetchLink(url);
+    if (found.kind === 'choices') {
+      choices = found.choices;
+      throw new DOMException('Needs a choice', 'AbortError');
+    }
+    title ||= (found.label?.length > 2 && !/\.pdf$/i.test(found.label) ? found.label : null) || titleFromUrl(found.url);
+    const pages = found.kind === 'pdf'
+      ? await pdfToPages(found.bytes.buffer, options)
+      : [await photoPage(await preparePhoto(new Blob([found.bytes], { type: found.type })))];
+    return { pages, title };
+  });
+  if (done) {
     $('linkUrl').value = '';
     $('linkForm').hidden = true;
     $('linkBtn').setAttribute('aria-expanded', 'false');
-  } else if (Array.isArray(result)) {
+  } else if (choices) {
     const list = $('linkChoiceList');
     list.replaceChildren();
-    for (const choice of result) {
+    for (const choice of choices) {
       const li = document.createElement('li');
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -286,33 +294,43 @@ function setupInstall() {
   }
 }
 
-// ═════════════ Updating the installed app ═════════════
+// ═════════════ Updates ═════════════
 
-/**
- * The installed Android app holds its own copy of this web app. When the
- * Notereader server has a newer copy, fetch it in the background; it takes
- * effect the next time the app is opened. (In a browser, the page is always
- * loaded fresh from the server, so nothing is needed there.)
- */
-async function autoUpdate() {
-  const updater = window.Capacitor?.Plugins?.CapacitorUpdater;
-  if (!isNative() || !updater) return;
+/** Opens an address outside the app (the phone's browser downloads the new version). */
+function openExternal(url) {
+  if (isNative()) window.location.href = url;
+  else window.open(url, '_blank', 'noopener');
+}
+
+/** Looks in the app's GitHub repository for a newer version; `manual` reports every outcome. */
+async function lookForUpdate(manual = false) {
+  const status = $('updateStatus');
+  if (manual) status.textContent = 'Checking…';
   try {
-    await updater.notifyAppReady(); // confirms this copy started fine (otherwise it is rolled back)
-    const local = await fetch('version.json').then((r) => (r.ok ? r.json() : null), () => null);
-    if (local?.version) localStorage.setItem('appVersion', local.version);
-    if (!serverBase()) return;
-    const remote = await fetch(`${serverBase()}/api/app/version`, { signal: AbortSignal.timeout(8000) }).then((r) => r.json());
-    if (!remote?.version || remote.version === local?.version) return;
-    // Don't retry a copy that was downloaded before but failed to start.
-    if (localStorage.getItem('updateTried') === remote.version) return;
-    const bundle = await updater.download({ url: `${serverBase()}/api/app/bundle.zip?v=${remote.version}`, version: remote.version });
-    await updater.next({ id: bundle.id });
-    localStorage.setItem('updateTried', remote.version);
-    toast('Update downloaded. It will be used the next time you open the app.', 5000);
+    const result = await checkForUpdate();
+    localStorage.setItem('updateChecked', String(Date.now()));
+    if (result.available) {
+      $('updateText').textContent = `Version ${result.latest} is available (you have ${result.installed}).`;
+      $('updateBtn').onclick = () => openExternal(result.apkUrl);
+      $('updateCard').hidden = false;
+      status.textContent = `Version ${result.latest} is available. Tap Download on the start screen, then open the downloaded file.`;
+    } else {
+      $('updateCard').hidden = true;
+      status.textContent = 'You have the latest version.';
+    }
   } catch (err) {
-    console.warn('Update check failed', err);
+    if (manual) status.textContent = err.message;
   }
+}
+
+async function setupUpdates() {
+  const info = await installedVersion();
+  $('versionText').textContent = info ? `Version ${info.version}` : 'Development copy';
+  $('checkUpdateBtn').hidden = !info;
+  $('checkUpdateBtn').onclick = () => lookForUpdate(true);
+  if (!info || !isNative()) return; // in a browser the page itself is always current
+  const last = Number(localStorage.getItem('updateChecked') || 0);
+  if (Date.now() - last > 6 * 3600 * 1000) lookForUpdate();
 }
 
 // ═════════════ Player view ═════════════
@@ -343,6 +361,7 @@ async function openScore(id) {
 }
 
 async function drawScore(firstOpen = false) {
+  if (!current) return;
   const wrap = $('scoreWrap');
   const s = settings();
   s.zoom ??= 36;
@@ -695,16 +714,9 @@ function init() {
     } catch (err) { toast(err.message); }
   };
 
-  $('settingsBtn').onclick = async () => {
-    $('serverUrl').value = localStorage.getItem('server') || '';
-    $('settingsDialog').showModal();
-    checkServer();
-  };
-  $('serverUrl').onchange = () => {
-    localStorage.setItem('server', $('serverUrl').value.trim());
-    checkServer();
-    autoUpdate();
-  };
+  $('settingsBtn').onclick = () => $('settingsDialog').showModal();
+  setupUpdates();
+  document.addEventListener('resume', setupUpdates); // app brought back to the foreground
 
   $('backBtn').onclick = async () => {
     player.pause();
@@ -823,25 +835,9 @@ function init() {
   });
 
   refreshLibrary();
-  autoUpdate();
-  document.addEventListener('resume', autoUpdate); // app brought back to the foreground
   requestAnimationFrame(frame);
   getToolkit().catch((err) => toast(err.message, 6000)); // warm up the engraver
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
-}
-
-async function checkServer() {
-  const el = $('serverStatus');
-  el.textContent = 'Checking the server…';
-  try {
-    const res = await fetch(`${serverBase()}/api/health`, { signal: AbortSignal.timeout(6000) });
-    const ok = res.ok && (await res.json()).ok;
-    el.textContent = ok ? 'Server is reachable.' : 'No recognition server at this address.';
-    const version = localStorage.getItem('appVersion');
-    if (isNative()) el.textContent += ` App version: ${version || 'as installed'}. Updates come from this server automatically.`;
-  } catch {
-    el.textContent = 'No recognition server at this address.';
-  }
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
 init();

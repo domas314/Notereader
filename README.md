@@ -1,11 +1,14 @@
 # Notereader
 
-A phone app for choir singers: photograph (or upload a PDF of) your sheet music,
-and Notereader reads it, shows the score, and plays it back in strict tempo while
-highlighting the notes being sung. You choose which voice you hear.
+A phone app for choir singers: photograph your sheet music (or open a PDF, or paste a
+link to one) and Notereader reads it, shows the score, and plays it back in strict tempo
+while highlighting the notes being sung. You choose which voice you hear.
+
+**Everything runs on the phone.** There is no server: the music is read, stored and
+played on the device and never uploaded.
 
 - **Scan** – camera photos, picked photos, multi-page PDFs, MusicXML / MEI files, or a
-  **web link**: paste the address of a PDF, or of a page that has the PDF on it.
+  **web link** to a PDF (or to a page that has the PDF on it).
   Recognition is built for imperfect input: tilted, unevenly lit, slightly blurry pages.
 - **Voices** – each voice (Soprano / Alto / Tenor / Bass, or however many the score has)
   can be Full, Quiet or Off. "Only" solos one voice; "Lead" keeps the others quietly
@@ -19,72 +22,52 @@ highlighting the notes being sung. You choose which voice you hear.
   set ♯ ♭ ♮, or remove it. Fixes are saved; "Undo all note fixes" returns to the scan.
 - **Library** – scores are saved on the phone and play offline.
 
-## How it is built
+## Install (Android)
+
+Open this repository's **Releases** page on the phone, download `Notereader.apk` from the
+newest release and open it. Android asks once to allow installing from that source.
+The app is about 200 MB because it carries the recognition engine and its models.
+
+**Updates.** The app looks at this repository's latest release when it starts. If there
+is a newer version it shows *Update available → Download*; open the downloaded file to
+install it over the old one (saved scores are kept). You can also check by hand under
+the sliders icon → *Check for updates*.
+Update checks need the repository to be **public** – a private repository cannot be
+read by the app.
+
+## How reading works
+
+Reading a page takes a few minutes on a phone (about 70 s per page on a desktop-class
+processor). Keep the app open while it works; the screen is kept awake.
 
 | Part | What it does |
 | --- | --- |
-| `web/` | The app itself: a plain HTML/JS web app (no build step) that installs to the home screen. Engraving by [Verovio](https://www.verovio.org) (vendored in `web/vendor/`), sound by the Web Audio API. |
-| `server/` | A small FastAPI server that serves the app and runs sheet-music recognition with [homr](https://github.com/liebharc/homr). |
+| `web/` | The whole app: plain HTML/JS, no build step. |
+| `web/omr/` | On-device recognition: runs [homr](https://github.com/liebharc/homr) (Python) in [Pyodide](https://pyodide.org), with its neural networks executed by [ONNX Runtime Web](https://onnxruntime.ai). |
+| `web/reader.js` | Turns photos, PDFs ([pdf.js](https://mozilla.github.io/pdf.js/)) and web links into pages for the engine. |
+| `web/score.js`, `web/player.js` | Engraving with [Verovio](https://www.verovio.org), voice splitting, and the tempo-locked Web Audio player. |
+| `web/update.js` | Update check against this repository's releases. |
+| `web/engine/` | The engine's large files (~195 MB). Not stored in the repository: `npm run engine` downloads them from the projects' public releases. |
+| `.github/workflows/android.yml` | Builds the APK on every push and publishes it as release `v1.<build>`. |
 
-Reading the music needs the server (the recognition models are ~150 MB and too heavy
-for a phone browser). Everything else – display, playback, saved scores – runs on the phone.
+It needs a current Android System WebView / Chrome (version 137 or newer).
 
-## Run it
-
-```bash
-python -m venv .venv && . .venv/bin/activate      # Python 3.11+
-pip install -r server/requirements.txt
-homr --init                                        # one-time model download (~150 MB)
-uvicorn server.app:app --host 0.0.0.0 --port 7860
-```
-
-Open `http://<your-computer's-address>:7860` on your phone (same Wi-Fi).
-
-Or with Docker (models are baked into the image):
+## Build it yourself
 
 ```bash
-docker build -t notereader .
-docker run -p 7860:7860 notereader
+npm install
+npm run engine            # download the reading engine into web/engine (needs python3, curl, unzip)
+npm run serve             # try it in a desktop Chrome at http://localhost:8080
+npm run android:prepare   # create the Android project (Node 22, Java 21, Android SDK)
+npm run android:build     # -> android/app/build/outputs/apk/debug/app-debug.apk
 ```
-
-To use it anywhere, host the container on any service that runs Docker images and
-gives you an HTTPS address (for example a free Hugging Face *Docker Space*: the image
-listens on port 7860, which is that platform's default). Over HTTPS the app can be
-added to the home screen and works offline for saved scores. Allow roughly 2 GB of RAM;
-a page takes about 10 s on a 4-core machine and longer on small shared CPUs.
-
-If the app is served from somewhere else than the recognition server, enter the
-server's address under Settings (the sliders icon on the start screen).
-
-## Install it on your phone
-
-**Android – installable app (APK).** Every push builds one on GitHub and attaches it to
-the **android-latest** release: on the phone, open the repository's **Releases** page
-(signed in to GitHub, as the repository is private), download `Notereader.apk` and open it
-(Android will ask you to allow installing from that source). On first start, open
-Settings (sliders icon) and enter your recognition server's address.
-**Automatic updates.** The installed app checks your Notereader server each time it is
-opened; if the server has a newer version of the app, it is downloaded in the background
-and used from the next start. So updating the server (pull the new code and restart it)
-updates every phone – no reinstalling. Saved scores are kept.
-Only changes to the Android shell itself (rare: permissions, icon, plugins) need a new
-APK. Each APK build is signed with a throw-away debug key, so installing a newer APK
-means uninstalling the old one first, which removes saved scores.
-To build it yourself: `npm install && npm run android:prepare && npm run android:build`
-(needs Node 22, Java 21 and the Android SDK).
-
-**iPhone and Android – home-screen app.** Open the hosted server's `https://` address
-in the browser. On Android tap **Install**; on iPhone use Safari's Share →
-**Add to Home Screen**. It then opens full-screen like any app and plays saved scores
-offline. On Android you can also *share* a link from the browser to Notereader.
 
 ## Reading from web links
 
-The server downloads the address you paste. If it is a web page, it looks for PDF links
-and embedded PDF viewers; with several PDFs you pick one. Pages that need a login, or
-that only show the music through scripts, cannot be read – open the PDF itself and copy
-its address, or download it and use *Photos / PDF*. Only public internet addresses are
-fetched; set `NOTEREADER_ALLOW_PRIVATE_URLS=1` to allow addresses on your own network.
+The app downloads the address you paste. If it is a web page, it looks for PDF links and
+embedded PDF viewers; with several PDFs you pick one. Pages that need a login, or that
+only show the music through scripts, cannot be read – open the PDF itself and copy its
+address, or download it and use *Photos / PDF*.
 
 ## Getting good scans
 
@@ -100,10 +83,19 @@ fetched; set `NOTEREADER_ALLOW_PRIVATE_URLS=1` to allow addresses on your own ne
 - Repeats, first/second endings and D.C./D.S. are not followed; the music plays straight through.
 - Lyrics, dynamics and tempo changes inside the piece are not read.
 - Note fixes cover pitch and accidentals, not rhythm.
-- The Docker image has not been built in CI yet; the server was tested by running it directly.
+- iPhone is not supported: there is no APK equivalent, and Safari lacks a feature the
+  reading engine needs.
+
+## Signing key
+
+Android only installs an update over an existing app if both are signed with the same
+key, so the build uses the fixed key in `android-signing/` (password `android`). It is a
+convenience key, not a secret: anyone with this repository can sign an APK with it. That
+is fine for an app you install yourself from your own releases; if you ever distribute
+it more widely, replace it with a key kept in a GitHub Actions secret.
 
 ## Licences
 
-homr is AGPL-3.0 and Verovio is LGPL-3.0; both are used unmodified. If you offer a
-hosted Notereader to other people, the AGPL requires that you make this source
-available to them.
+homr is AGPL-3.0 and is shipped inside the app unmodified, so the app as a whole must be
+offered under AGPL-compatible terms with its source available (this repository).
+Verovio is LGPL-3.0; Pyodide is MPL-2.0; ONNX Runtime and pdf.js are MIT / Apache-2.0.
