@@ -19,7 +19,8 @@ from homr.autocrop import autocrop  # noqa: E402
 from homr.main import ProcessingConfig, process_image, run_homr  # noqa: E402
 from homr.music_xml_generator import XmlGeneratorArguments  # noqa: E402
 from homr import main as homr_main  # noqa: E402
-from homr import staff_parsing  # noqa: E402
+from homr import staff_parsing, system_repair  # noqa: E402
+from homr.model import MultiStaff  # noqa: E402
 from homr.segmentation import inference_segnet  # noqa: E402
 from homr.simple_logging import eprint  # noqa: E402
 from homr.transformer import staff2score  # noqa: E402
@@ -29,13 +30,18 @@ from homr.transformer.vocabulary import EncodedSymbol  # noqa: E402
 # Patches of the page with nothing on them (margins, the table around a photo,
 # space under the last system) are skipped instead of being run through the
 # segmentation network: a blank patch can only contain background anyway.
-DARK_SHARE = 0.001  # a patch with fewer ink pixels than this share counts as blank
+# Ink is judged against the paper around it, so faint print or a dim photo still
+# counts as ink; and a patch next to one with ink is never skipped, so notes far
+# above or below a staff are not lost.
+INK_RATIO = 0.8  # a pixel darker than 80% of the local paper brightness is ink
+INK_SHARE = 0.001  # a patch with less ink than this share of its pixels is blank
 
 
 def _is_blank(patch):
-    sample = patch[0, ::4, ::4]
-    ink = sample < np.median(sample) - 80
-    return ink.mean() < DARK_SHARE
+    grey = np.clip(patch[0], 0, 255).astype(np.uint8)
+    paper = cv2.medianBlur(grey, 31).astype(np.float32)  # local paper brightness
+    ink = grey.astype(np.float32) < INK_RATIO * paper
+    return ink.mean() < INK_SHARE
 
 
 # Several helper workers (pool.js) can run the networks side by side, one per
@@ -84,16 +90,20 @@ def _inference(image_org, use_gpu_inference, batch_size, step_size, win_size):
     image = np.transpose(image_org, (2, 0, 1)).astype(np.float32)
     _, h, w = image.shape
     blank = np.zeros((win_size, win_size), dtype=np.uint8)
-    data = []
-    todo = []  # (index in data, patch)
-    for y_loop in range(0, max(h, win_size), step_size):
+    grid = []  # (row, col, patch, is blank)
+    for row, y_loop in enumerate(range(0, max(h, win_size), step_size)):
         y = min(y_loop, h - win_size)
-        for x_loop in range(0, max(w, win_size), step_size):
+        for col, x_loop in enumerate(range(0, max(w, win_size), step_size)):
             x = min(x_loop, w - win_size)
             patch = inference_segnet.extract_patch(image, y, x, win_size)
-            data.append(blank)
-            if not _is_blank(patch):
-                todo.append((len(data) - 1, patch))
+            grid.append((row, col, patch, _is_blank(patch)))
+    inked = {(r, c) for r, c, _, empty in grid if not empty}
+    data = [blank] * len(grid)
+    todo = []  # (index in data, patch)
+    for index, (row, col, patch, empty) in enumerate(grid):
+        near_ink = any((row + dr, col + dc) in inked for dr in (-1, 0, 1) for dc in (-1, 0, 1))
+        if not empty or near_ink:
+            todo.append((index, patch))
     eprint(f"Segmentation: {len(todo)} patches to read, {len(data) - len(todo)} blank ones skipped")
 
     labels = None
@@ -127,6 +137,60 @@ def _inference(image_org, use_gpu_inference, batch_size, step_size, win_size):
 
 
 inference_segnet.inference = _inference
+
+
+# ───── Finding systems the engine missed ─────
+# homr groups staves into systems by braces and barlines drawn across them.
+# Choir scores often have neither (barlines stop between the staves to leave room
+# for lyrics), and then every staff is read as a line of its own: the voices of a
+# hymn get mixed up and seem to lose notes. Staves of one system start and end at
+# the same place and are closer together than separate systems, so when nothing
+# was grouped, staves are grouped by that pattern, if it is consistent on the page.
+
+SAME_EXTENT = 2.0  # staff ends within this many staff-space units count as the same
+GAP_MARGIN = 1.2  # gaps between systems must be at least this much larger than within
+
+
+def _group_systems(rows):
+    flat = [staff for row in rows for staff in row.staffs]
+    if len(flat) < 2 or any(len(row.staffs) != 1 for row in rows) or any(s.is_grandstaff for s in flat):
+        return None
+    unit = float(np.median([s.average_unit_size for s in flat]))
+
+    def same_extent(a, b):
+        return abs(a.min_x - b.min_x) <= SAME_EXTENT * unit and abs(a.max_x - b.max_x) <= SAME_EXTENT * unit
+
+    runs = [[flat[0]]]
+    for staff in flat[1:]:
+        if same_extent(runs[-1][-1], staff):
+            runs[-1].append(staff)
+        else:
+            runs.append([staff])
+    longest = max(len(run) for run in runs)
+    for period in range(2, min(6, longest) + 1):
+        if any(len(run) % period for run in runs):
+            continue
+        inner, between = [], []
+        for run in runs:
+            for i in range(1, len(run)):
+                gap = run[i].min_y - run[i - 1].max_y
+                (between if i % period == 0 else inner).append(gap)
+        if not inner or (between and min(between) < GAP_MARGIN * max(inner)):
+            continue
+        groups = [run[i : i + period] for run in runs for i in range(0, len(run), period)]
+        eprint(f"Grouping staves into systems of {period} by their layout")
+        return [MultiStaff(group, []) for group in groups]
+    return None
+
+
+def _repair_systems(debug, rows):
+    rows = _original_repair_systems(debug, rows)
+    grouped = _group_systems(rows)
+    return _original_repair_systems(debug, grouped) if grouped else rows
+
+
+_original_repair_systems = system_repair.repair_systems
+homr_main.repair_systems = _repair_systems
 
 
 # ───── Reading the staves side by side ─────

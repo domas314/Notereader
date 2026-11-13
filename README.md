@@ -49,7 +49,8 @@ Reading happens in steps: find the staves and notes on the page (segmentation), 
 each staff. To make that fast on a phone:
 
 - **Blank areas are skipped.** Margins, the table around a photo and empty space under the
-  last system are not run through the segmentation network (a third of a typical photo).
+  last system are not run through the segmentation network. Ink is judged against the paper
+  around it, so faint or dim pages are read in full, and areas next to music are never skipped.
 - **Several cores.** Helper workers (`web/omr/pool.js`) segment the page and read the staves
   side by side, one per spare core: up to 3 on phones reporting 8 GB of memory, 2 on 4 GB,
   none below. Each needs about 300 MB. If the phone ever closes the app during a reading, the
@@ -102,6 +103,8 @@ address, or download it and use *Photos / PDF*.
 ## Known limits
 
 - Repeat signs and first/second endings are followed. D.C., D.S., Coda and Fine are not.
+- Hymn-style scores (Soprano + Alto on one staff, Tenor + Bass on another) are read as four
+  voices, also when the barlines are not drawn through both staves.
 - A piano or organ accompaniment is recognised when it is written on a braced pair of staves
   below the voices; it then appears as "Piano right hand" / "Piano left hand" next to the voices.
 - Scores scanned before repeats were fixed may have their start-repeat sign in the wrong
