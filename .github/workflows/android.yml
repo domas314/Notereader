@@ -39,6 +39,30 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+      - name: Check the update token
+        # Reports where the problem is, without ever printing the token.
+        env:
+          CHECKUPDATE_TOKEN: ${{ secrets.CHECKUPDATE_TOKEN }}
+          SAVED_AS_VARIABLE: ${{ vars.CHECKUPDATE_TOKEN != '' }}
+        run: |
+          if [ -z "$CHECKUPDATE_TOKEN" ]; then
+            if [ "$SAVED_AS_VARIABLE" = "true" ]; then
+              echo "::warning title=Update token::CHECKUPDATE_TOKEN is saved as a Variable. Delete it there and add it under Settings > Secrets and variables > Actions > Secrets (Repository secrets)."
+            else
+              echo "::warning title=Update token::This build cannot see a secret named CHECKUPDATE_TOKEN. Add it in THIS repository under Settings > Secrets and variables > Actions > Repository secrets (not Variables, Environments, Codespaces or Dependabot, and not in $UPDATE_REPO)."
+            fi
+            exit 0
+          fi
+          code=$(curl -s -o /tmp/repo.json -w '%{http_code}' -H "Authorization: Bearer $CHECKUPDATE_TOKEN" "https://api.github.com/repos/$UPDATE_REPO")
+          if [ "$code" = "401" ]; then
+            echo "::warning title=Update token::The CHECKUPDATE_TOKEN secret is found, but GitHub rejects it (revoked, expired or mistyped). Create a new token and save it again."
+          elif [ "$code" != "200" ]; then
+            echo "::warning title=Update token::The CHECKUPDATE_TOKEN secret is found, but it has no access to $UPDATE_REPO (HTTP $code). Give the token access to that repository."
+          elif [ "$(jq -r '.permissions.push' /tmp/repo.json)" != "true" ]; then
+            echo "::warning title=Update token::The CHECKUPDATE_TOKEN secret can see $UPDATE_REPO but cannot write to it. Give the token Contents: Read and write."
+          else
+            echo "::notice title=Update token::CHECKUPDATE_TOKEN works: it can publish releases to $UPDATE_REPO."
+          fi
       - run: npm install --no-audit --no-fund
       - name: Download the on-device reading engine
         run: npm run engine
