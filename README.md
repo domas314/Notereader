@@ -102,6 +102,8 @@ address, or download it and use *Photos / PDF*.
 ## Known limits
 
 - Repeat signs and first/second endings are followed. D.C., D.S., Coda and Fine are not.
+- A piano or organ accompaniment is recognised when it is written on a braced pair of staves
+  below the voices; it then appears as "Piano right hand" / "Piano left hand" next to the voices.
 - Scores scanned before repeats were fixed may have their start-repeat sign in the wrong
   place; scan them again.
 - Lyrics, dynamics and tempo changes inside the piece are not read.

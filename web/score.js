@@ -165,8 +165,42 @@ function buildModel(tk, mei) {
  * closed scores (soprano+alto sharing a staff, tenor+bass sharing another) are
  * split into an upper and a lower line per staff. Keyboard staves stay whole.
  */
+const KEYBOARD_NAME = /piano|organ|keyboard|klavier|pno|accomp|harp|cembalo|harpsichord|orgel|fortepiano/i;
+
+/**
+ * Staves that belong to a keyboard instrument, from how the score groups them:
+ * a braced pair (a "grand staff"), a group or staff named like a keyboard, or a
+ * keyboard sound. Only counts when the score also has other staves: a score that
+ * is nothing but one braced pair is a choir written on two staves.
+ * Returns Map(staff number -> instrument name).
+ */
+function keyboardStaves(doc) {
+  const found = new Map();
+  const label = (el) => [...el.children].find((c) => c.localName === 'label')?.textContent.trim() || el.getAttribute('label') || '';
+  const keyboardSound = (el) => {
+    const instr = [...el.children].find((c) => c.localName === 'instrDef');
+    const program = Number(instr?.getAttribute('midi.instrnum'));
+    return Number.isFinite(program) && instr?.hasAttribute('midi.instrnum') && program >= 0 && program <= 23; // General MIDI pianos and organs
+  };
+  for (const group of doc.querySelectorAll('staffGrp')) {
+    const staves = [...group.children].filter((c) => c.localName === 'staffDef');
+    if (staves.length < 2) continue;
+    const braced = [...group.children].some((c) => c.localName === 'grpSym' && c.getAttribute('symbol') === 'brace') || group.getAttribute('symbol') === 'brace';
+    const name = label(group);
+    if (braced || KEYBOARD_NAME.test(name) || keyboardSound(group)) {
+      for (const def of staves) found.set(Number(def.getAttribute('n')), KEYBOARD_NAME.test(name) ? name : 'Piano');
+    }
+  }
+  for (const def of doc.querySelectorAll('staffDef')) {
+    if (KEYBOARD_NAME.test(label(def))) found.set(Number(def.getAttribute('n')), label(def));
+  }
+  const all = new Set([...doc.querySelectorAll('staffDef')].map((d) => Number(d.getAttribute('n'))));
+  return [...all].some((n) => !found.has(n)) ? found : new Map();
+}
+
 function assignVoices(notes, doc) {
   const staffNumbers = [...new Set(notes.map((n) => n.staff))].sort((a, b) => a - b);
+  const keyboardOf = keyboardStaves(doc);
   const labels = new Map();
   for (const def of doc.querySelectorAll('staffDef')) {
     const n = Number(def.getAttribute('n'));
@@ -184,11 +218,11 @@ function assignVoices(notes, doc) {
     }
     const groups = [...onsets.values()];
     const share = (min) => groups.filter((g) => g.length >= min).length / groups.length;
-    const keyboard = share(3) > 0.15;
+    const keyboard = keyboardOf.has(staff) || share(3) > 0.15;
     const split = !keyboard && share(2) > 0.15;
 
     if (!split) {
-      const v = { staff, line: 0, keyboard, label: labels.get(staff) || '', notes: staffNotes };
+      const v = { staff, line: 0, keyboard, label: keyboardOf.get(staff) || labels.get(staff) || '', notes: staffNotes };
       voices.push(v);
       for (const n of staffNotes) n.voices.push(v);
       continue;
@@ -236,10 +270,20 @@ function assignVoices(notes, doc) {
     else v.name = `Voice ${i + 1}`;
   });
   const keyboards = voices.filter((v) => v.keyboard);
-  keyboards.forEach((v, i) => {
-    v.name = generic(v.label) ? (keyboards.length > 2 ? `Keyboard ${i + 1}` : i === 0 ? 'Piano (upper)' : 'Piano (lower)') : v.label;
-    if (keyboards.length === 1) v.name = generic(v.label) ? 'Piano' : v.label;
-  });
+  // Keyboard staves: "Piano right hand" / "Piano left hand" for a pair.
+  const byInstrument = new Map();
+  for (const v of keyboards) {
+    const name = generic(v.label) ? 'Piano' : v.label;
+    if (!byInstrument.has(name)) byInstrument.set(name, []);
+    byInstrument.get(name).push(v);
+  }
+  for (const [name, staves] of byInstrument) {
+    staves.forEach((v, i) => {
+      if (staves.length === 1) v.name = name;
+      else if (staves.length === 2) v.name = `${name} ${i === 0 ? 'right hand' : 'left hand'}`;
+      else v.name = `${name} ${i + 1}`;
+    });
+  }
 
   voices.forEach((v, i) => {
     v.index = i;
@@ -356,6 +400,11 @@ export function tidyScan(xml) {
   const parts = [...doc.querySelectorAll('part')];
   if (!parts.length) return xml;
 
+  // 0. The engine names every sung staff "Voice"; drop that placeholder from the page.
+  for (const name of doc.querySelectorAll('score-part > part-name')) {
+    if (name.textContent.trim() === 'Voice') name.textContent = '';
+  }
+
   // 1. Start-repeat signs belong on the left of the bar.
   for (const repeat of doc.querySelectorAll('barline repeat[direction="forward"]')) {
     const barline = repeat.parentNode;
@@ -395,5 +444,88 @@ export function tidyScan(xml) {
     }
   }
   for (const measures of byPart) measures.forEach((m, i) => m.setAttribute('number', String(i + 1)));
+
+  // 3. Write each bar one voice after another. For piano (two staves in one part)
+  //    the engine interleaves the hands beat by beat; that is valid MusicXML, but
+  //    the notation library then miscounts the bar's length (a 4/4 bar became 6
+  //    beats), and every other part paused while the piano "finished" the bar.
+  for (const measures of byPart) for (const measure of measures) regroupVoices(doc, measure);
   return new XMLSerializer().serializeToString(doc);
+}
+
+const childText = (el, name) => [...el.children].find((c) => c.localName === name)?.textContent;
+function makeTimed(doc, tag, duration, voice, staff) {
+  const el = doc.createElement(tag);
+  const d = doc.createElement('duration');
+  d.textContent = String(duration);
+  el.appendChild(d);
+  if (tag === 'forward') {
+    if (voice) { const v = doc.createElement('voice'); v.textContent = voice; el.appendChild(v); }
+    if (staff) { const st = doc.createElement('staff'); st.textContent = staff; el.appendChild(st); }
+  }
+  return el;
+}
+
+/** Rewrites a MusicXML bar so that each voice's notes come in one run, voices one after another. */
+function regroupVoices(doc, measure) {
+  const children = [...measure.children];
+  if (!children.some((c) => c.localName === 'backup' || c.localName === 'forward')) return;
+  const before = [];
+  const after = [];
+  const events = []; // { onset, duration, staff, voice, nodes }
+  let time = 0;
+  let last = null;
+  for (const el of children) {
+    const tag = el.localName;
+    if (tag === 'note') {
+      const duration = Number(childText(el, 'duration') || 0);
+      const isChord = [...el.children].some((c) => c.localName === 'chord');
+      if (isChord && last) { last.nodes.push(el); continue; }
+      last = { onset: time, duration, staff: Number(childText(el, 'staff') || 1), voice: Number(childText(el, 'voice') || 1), nodes: [el] };
+      events.push(last);
+      time += duration;
+    } else if (tag === 'backup' || tag === 'forward') {
+      time += (tag === 'backup' ? -1 : 1) * Number(childText(el, 'duration') || 0);
+      last = null;
+    } else if (tag === 'barline' && (el.getAttribute('location') || 'right') === 'right') {
+      after.push(el);
+    } else {
+      before.push(el); // attributes, directions, print, left barlines
+    }
+  }
+  if (!events.length || events.some((e) => e.onset < 0)) return; // unexpected; leave the bar as it is
+
+  // Lanes: notes of one voice that follow each other. A note that overlaps the
+  // previous one of its voice starts a new lane with a voice number of its own,
+  // so no note moves in time.
+  let spareVoice = Math.max(...events.map((e) => e.voice)) + 1;
+  const lanes = [];
+  const sorted = [...events].sort((a, b) => a.staff - b.staff || a.voice - b.voice || a.onset - b.onset);
+  for (const e of sorted) {
+    let lane = lanes.find((l) => l.staff === e.staff && l.origin === e.voice && l.end <= e.onset);
+    if (!lane) {
+      const taken = lanes.some((l) => l.staff === e.staff && l.voice === e.voice);
+      lane = { staff: e.staff, origin: e.voice, voice: taken ? spareVoice++ : e.voice, end: 0, events: [] };
+      lanes.push(lane);
+    }
+    lane.events.push(e);
+    lane.end = e.onset + e.duration;
+  }
+
+  for (const el of children) el.remove();
+  for (const el of before) measure.appendChild(el);
+  lanes.forEach((lane, i) => {
+    if (i > 0) measure.appendChild(makeTimed(doc, 'backup', lanes[i - 1].end));
+    let cursor = 0;
+    for (const e of lane.events) {
+      if (e.onset > cursor) measure.appendChild(makeTimed(doc, 'forward', e.onset - cursor, String(lane.voice), String(lane.staff)));
+      for (const n of e.nodes) {
+        const v = [...n.children].find((c) => c.localName === 'voice');
+        if (v) v.textContent = String(lane.voice);
+        measure.appendChild(n);
+      }
+      cursor = e.onset + e.duration;
+    }
+  });
+  for (const el of after) measure.appendChild(el);
 }
