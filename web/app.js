@@ -1,7 +1,7 @@
 import { renderScore, toMEI, editNote, pitchName, getToolkit, tidyScan } from './score.js';
 import { Player } from './player.js';
 import { listScores, getScore, putScore, deleteScore } from './store.js';
-import { readPages, pdfToPages, fetchLink, warmUp, isNative } from './reader.js';
+import { readPages, pdfToPages, fetchLink, warmUp, isNative, readingPlan, resetReadingLimit } from './reader.js';
 import { checkForUpdate, installedVersion } from './update.js';
 
 const $ = (id) => document.getElementById(id);
@@ -323,13 +323,31 @@ async function lookForUpdate(manual = false) {
   }
 }
 
+/** Explains in About how many processor cores music reading uses, and why. */
+function showReadingPlan() {
+  const plan = readingPlan();
+  const el = $('engineInfo');
+  const used = plan.helpers > 1 ? `${plan.helpers} processor cores side by side` : '1 processor core';
+  const why = {
+    memory: ` The phone reports ${plan.memory} GB of memory (Android rounds this down); each extra core needs about 300 MB, so more could make Android close the app.`,
+    cores: '',
+    interrupted: ' It was lowered because a reading was cut short (most likely the phone ran low on memory).',
+  }[plan.reason] || '';
+  el.textContent = `Music reading uses ${used} (this phone has ${plan.cores}).${why}`;
+  if (plan.reason === 'interrupted') {
+    const again = document.createElement('button');
+    again.type = 'button';
+    again.className = 'link';
+    again.textContent = 'Use more cores again';
+    again.onclick = () => { resetReadingLimit(); showReadingPlan(); };
+    el.append(' ', again);
+  }
+}
+
 async function setupUpdates() {
   const info = await installedVersion();
   $('versionText').textContent = info ? `Version ${info.version}` : 'Development copy';
-  const cores = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
-  $('engineInfo').textContent = cores > 1
-    ? `Music reading uses ${cores} processor cores.`
-    : 'Music reading uses 1 processor core (this phone’s browser engine does not allow more).';
+  showReadingPlan();
   $('checkUpdateBtn').hidden = !info;
   $('checkUpdateBtn').onclick = () => lookForUpdate(true);
   if (!info || !isNative()) return; // in a browser the page itself is always current
@@ -740,7 +758,7 @@ function init() {
     } catch (err) { toast(err.message); }
   };
 
-  $('settingsBtn').onclick = () => $('settingsDialog').showModal();
+  $('settingsBtn').onclick = () => { showReadingPlan(); $('settingsDialog').showModal(); };
   setupUpdates();
   document.addEventListener('resume', setupUpdates); // app brought back to the foreground
 

@@ -23,11 +23,36 @@ function helperLimit() {
   return limit;
 }
 
+/**
+ * How many processor cores reading uses. Parallel helpers (omr/pool.js), one per
+ * spare core, limited by the memory the phone reports (each needs ~300 MB) and
+ * lowered if a reading was ever cut short.
+ */
+export function readingPlan() {
+  const cores = navigator.hardwareConcurrency || 2;
+  const memory = navigator.deviceMemory || 4; // GB, rounded down to 2, 4 or 8 by the browser
+  const byMemory = memory >= 8 ? 3 : memory >= 4 ? 2 : 1;
+  const limit = Number(store.get('helperLimit') || 3);
+  let helpers = Math.max(1, Math.min(cores - 1, byMemory, limit));
+  if (helpers < 2) helpers = 1; // a single helper would only add memory, not speed
+  const reason = helpers >= Math.min(cores - 1, 3) ? null
+    : limit < byMemory ? 'interrupted'
+      : byMemory < cores - 1 ? 'memory' : 'cores';
+  return { cores, memory, helpers, reason };
+}
+
+/** Lets reading use as many cores as the phone allows again (after an interrupted reading). */
+export function resetReadingLimit() {
+  store.del('helperLimit');
+  if (worker) { worker.terminate(); worker = null; }
+}
+
 let worker = null;
 function getWorker() {
   if (!worker) {
     const url = new URL('./omr/worker.js', import.meta.url);
-    url.searchParams.set('helpers', String(helperLimit()));
+    helperLimit(); // applies a lower limit if the last reading was cut short
+    url.searchParams.set('helpers', String(readingPlan().helpers));
     worker = new Worker(url, { type: 'module' });
   }
   return worker;
@@ -73,7 +98,7 @@ export function readPages(pages, { onProgress = () => {}, signal } = {}) {
         if ((m = /^Processing .*page_(\d+)/.exec(line))) { page = Number(m[1]) + 1; staves = 0; onProgress(`${where()}looking at the page`); }
         else if (/^Loading model segnet/.test(line) || /^Starting Inference/.test(line) || /^Segmentation:/.test(line)) onProgress(`${where()}finding staves and notes`);
         else if ((m = /^Found (\d+) staffs/.exec(line))) { staves = Number(m[1]); onProgress(`${where()}found ${staves} staves, preparing them`); }
-        else if ((m = /^Reading (\d+) staffs on/.exec(line))) onProgress(`${where()}reading ${m[1]} staves`);
+        else if ((m = /^Reading (\d+) staffs on (\d+)/.exec(line))) onProgress(`${where()}reading ${m[1]} staves, ${m[2]} at a time`);
         else if ((m = /^Read staff (\d+) of (\d+)/.exec(line))) onProgress(`${where()}read ${m[1]} of ${m[2]} staves`);
         else if ((m = /^Running TrOmr inference on staff image (\d+)/.exec(line))) {
           onProgress(`${where()}reading staff ${Number(m[1]) + 1}${staves ? ` of ${staves}` : ''}`);

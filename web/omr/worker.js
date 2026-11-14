@@ -18,11 +18,10 @@ ort.env.logLevel = 'error';
 // How many: one per spare processor core, limited by the phone's memory (each
 // helper holds its own copy of the networks, about 300 MB) and by the app, which
 // lowers the limit if a reading was ever cut short (see reader.js).
+// The number is worked out by the app (readingPlan in reader.js) and passed in.
 const cores = navigator.hardwareConcurrency || 2;
-const memory = navigator.deviceMemory || 4; // GB, rounded down to 2, 4 or 8 by the browser
-let POOL_SIZE = Math.max(1, Math.min(cores - 1, memory >= 8 ? 3 : memory >= 4 ? 2 : 1));
-const helperLimit = Number(new URL(self.location.href).searchParams.get('helpers'));
-if (Number.isFinite(helperLimit) && helperLimit > 0) POOL_SIZE = Math.min(POOL_SIZE, helperLimit);
+const requested = Number(new URL(self.location.href).searchParams.get('helpers'));
+let POOL_SIZE = Number.isFinite(requested) && requested > 0 ? Math.min(requested, Math.max(1, cores - 1)) : 1;
 if (POOL_SIZE < 2) POOL_SIZE = 1; // a single helper would only add memory, not speed
 
 class Helper {
